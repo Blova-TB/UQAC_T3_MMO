@@ -20,6 +20,12 @@ services:
       - "3000:3000"
     networks:
       - game-network
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - game-network
 
 networks:
   game-network:
