@@ -10,8 +10,6 @@ pub struct ServerInfo {
     pub max_players: u32,
 }
 
-// 2. Le gestionnaire de DB. Clone est très peu coûteux ici car
-// MultiplexedConnection est conçu pour être partagé entre les threads.
 #[derive(Clone)]
 pub struct Database {
     conn: MultiplexedConnection,
@@ -19,31 +17,37 @@ pub struct Database {
 
 impl Database {
     pub async fn new(redis_url: &str) -> Result<Self, redis::RedisError> {
-        // 1. Création du client (parsing de l'URL)
         let client = redis::Client::open(redis_url)?;
-
-        // 2. Établissement de la connexion asynchrone unifiée
         let conn = client.get_multiplexed_async_connection().await?;
-
         Ok(Self { conn })
     }
 
+    /// Utilise HSET pour ranger le serveur dans un "dossier" global
     pub async fn save_server(&self, server: &ServerInfo) -> Result<(), redis::RedisError> {
-        let mut conn = self.conn.clone(); // Requis par l'API de la crate redis
-        let json = serde_json::to_string(server).unwrap(); // Serialisation ultra-rapide
-
-        // On utilise l'ID du conteneur comme clé unique
-        let key = format!("server:{}", server.container_id);
-        conn.set(key, json).await
+        let mut conn = self.conn.clone();
+        let json = serde_json::to_string(server).unwrap();
+        // Clé principale: "servers_hash" | Sous-clé: container_id | Valeur: JSON
+        conn.hset("servers_hash", &server.container_id, json).await
     }
 
-    pub async fn get_server(&self, container_id: &str) -> Result<Option<ServerInfo>, redis::RedisError> {
+    /// L'algorithme de Matchmaking (Recherche du meilleur serveur)
+    pub async fn get_available_server(&self) -> Result<Option<ServerInfo>, redis::RedisError> {
         let mut conn = self.conn.clone();
-        let key = format!("server:{}", container_id);
 
-        let result: Option<String> = conn.get(key).await?;
+        // HVALS récupère toutes les valeurs (les JSON) du Hash d'un coup
+        let servers_json: Vec<String> = conn.hvals("servers_hash").await?;
 
-        // Map la string JSON de retour vers notre Struct Rust
-        Ok(result.map(|json| serde_json::from_str(&json).unwrap()))
+        // Utilisation de l'approche fonctionnelle Rust pour trouver le meilleur candidat
+        let best_server = servers_json
+            .into_iter()
+            // 1. Désérialise les JSON valides, ignore les erreurs
+            .filter_map(|json| serde_json::from_str::<ServerInfo>(&json).ok())
+            // 2. Ne garde que les serveurs qui ont de la place
+            .filter(|server| server.players_online < server.max_players)
+            // 3. (Optionnel mais recommandé) On prend le serveur le plus rempli
+            // pour regrouper les joueurs et éviter d'avoir 10 serveurs avec 1 joueur.
+            .max_by_key(|server| server.players_online);
+
+        Ok(best_server)
     }
 }
