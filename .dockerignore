@@ -1,0 +1,13 @@
+﻿# Exclure le dossier de compilation de l'hôte
+target/
+
+# Exclure les métadonnées Git
+.git/
+.gitignore
+
+# Exclure les fichiers de configuration de l'IDE (RustRover / IntelliJ)
+.idea/
+*.iml
+
+# Exclure les assets lourds si le serveur n'en a pas besoin (à ajuster selon votre archi)
+assets/

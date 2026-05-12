@@ -1,0 +1,13 @@
+﻿[workspace]
+members = [
+    "crates/shared",
+    "crates/client",
+    "crates/server",
+    "crates/orchestrator"
+]
+resolver = "2"
+
+# Optimisation globale pour les builds en release (impacte tous les crates)
+[profile.release]
+opt-level = 3
+lto = "thin"

@@ -1,0 +1,16 @@
+﻿version: '3.8'
+
+services:
+  orchestrator:
+    build:
+      context: .. # Crucial : Remonte à la racine du projet pour lire le Workspace
+      dockerfile: docker/orchestrator.Dockerfile
+    ports:
+      - "8080:8080/tcp" # Port API de l'orchestrateur
+    volumes:
+      # Accès au socket Docker local requis par 'bollard'
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - RUST_LOG=info
+
+  # Le server n'est pas instancié ici, l'orchestrateur le fera via l'API Docker.
