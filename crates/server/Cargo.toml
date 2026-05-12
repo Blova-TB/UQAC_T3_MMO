@@ -3,4 +3,14 @@ name = "server"
 version = "0.1.0"
 edition = "2024"
 
+[features] # cargo run -p server --features "dev"
+dev = ["bevy/dynamic_linking"]
+
 [dependencies]
+bevy = { version = "0.18.1", default-features = false, features = [
+    "bevy_log",
+    "bevy_state"
+] }
+avian2d = "0.6"
+shared = { path = "../shared" }
+
