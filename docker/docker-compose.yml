@@ -12,5 +12,16 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - RUST_LOG=info
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/gateway.Dockerfile
+    ports:
+      - "3000:3000"
+    networks:
+      - game-network
 
+networks:
+  game-network:
+    driver: bridge
   # Le server n'est pas instancié ici, l'orchestrateur le fera via l'API Docker.
