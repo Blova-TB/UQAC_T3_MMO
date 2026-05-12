@@ -1,5 +1,5 @@
 ﻿# --- Stage 1: Builder ---
-FROM rust:1.77-bookworm AS builder
+FROM rust:latest AS builder
 WORKDIR /app
 
 # Dépendances système minimales
