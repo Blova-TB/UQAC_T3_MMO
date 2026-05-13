@@ -25,15 +25,17 @@ services:
       retries: 5
   orchestrator:
     build:
-      context: .. # Crucial : Remonte à la racine du projet pour lire le Workspace
+      context: ..
       dockerfile: docker/orchestrator.Dockerfile
     ports:
-      - "8080:8080/tcp" # Port API de l'orchestrateur
-    volumes:
-      # Accès au socket Docker local requis par 'bollard'
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "4000:4000"
     environment:
       - RUST_LOG=info
+      - REDIS_URL=redis://redis:6379/
+    depends_on:
+      - redis
+    networks:
+      - game-network
   gatekeeper:
     build:
       context: ..
@@ -48,6 +50,12 @@ services:
       - RUST_LOG=info
       - ROCKET_ADDRESS=0.0.0.0
       - ROCKET_PORT=3000
+    networks:
+      - game-network
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
     networks:
       - game-network
 
