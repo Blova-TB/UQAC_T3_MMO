@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.8.9"
-tokio = { workspace = true }
+rocket = "0.5.1"

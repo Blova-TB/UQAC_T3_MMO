@@ -18,6 +18,10 @@ services:
       dockerfile: docker/gatekeeper.Dockerfile
     ports:
       - "3000:3000"
+    environment:
+      - RUST_LOG=info
+      - ROCKET_ADDRESS=0.0.0.0
+      - ROCKET_PORT=3000
     networks:
       - game-network
 
