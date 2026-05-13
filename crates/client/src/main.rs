@@ -70,71 +70,69 @@ fn setup_client(mut commands: Commands) {
 }
 
 fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExit>) {
-    loop {
-        match state.peer.poll() {
-            Ok(Some(event)) => match event {
-                GameNetworkEvent::Connected(conn) => {
-                    println!("Client : Connecté au serveur QUIC. En attente de l'ouverture du flux...");
-                    state.connection = Some(conn);
-                }
-                GameNetworkEvent::StreamCreated(conn, stream) => {
-                    if !state.joined && stream.is_reliable() {
-                        println!("Client : Flux Fiable reçu. Envoi de la requête de connexion (Join)...");
-                        state.joined = true; // Verrouillage pour empêcher la boucle
-
-                        let packet = ClientPacket::Join {
-                            username: "TestPlayer_01".to_string(),
-                        };
-
-                        let encoded_data = bitcode::encode(&packet);
-                        if let Err(e) = state.peer.send(&conn, &stream, Bytes::from(encoded_data)) {
-                            eprintln!("Client : Échec de l'envoi du paquet: {:?}", e);
-                        }
-                    } else {
-                        println!("Client : Flux supplémentaire reçu (Fiable: {}). Réservé aux données du jeu.", stream.is_reliable());
-                    }
-                }
-                GameNetworkEvent::Message { data, .. } => {
-                    // Décodage de la réponse du serveur
-                    if let Ok(packet) = bitcode::decode::<ServerPacket>(&data) {
-                        match packet {
-                            ServerPacket::Welcome { player_id } => {
-                                println!("Client : Succès ! Le serveur m'a assigné l'ID : {}", player_id);
-                            }
-                            ServerPacket::RejectedFull => {
-                                println!("Client : Connexion refusée (Serveur plein).");
-                                exit.write(AppExit::Success);
-                            }
-                            ServerPacket::SyncPositions(players) => {
-                                println!("--- Snapshot Serveur : {} joueur(s) ---", players.len());
-                                for player in players {
-                                    println!(
-                                        " > Entité [{}] - Position: X={:.2}, Y={:.2}",
-                                        player.entity_bits,
-                                        player.position[0],
-                                        player.position[1]
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        eprintln!("Client : Échec du décodage du paquet serveur.");
-                    }
-                }
-                GameNetworkEvent::Disconnected(_) => {
-                    println!("Client : Déconnecté par le serveur.");
-                    exit.write(AppExit::Success);
-                }
-                GameNetworkEvent::Error { inner, .. } => {
-                    eprintln!("Client : Erreur protocole : {:?}", inner);
-                }
-                _ => {}
-            },
-            Ok(None) => break,
-            Err(e) => {
-                eprintln!("Client : Erreur fatale de polling : {:?}", e);
-                break;
+    match state.peer.poll() {
+        Ok(Some(event)) => match event {
+            GameNetworkEvent::Connected(conn) => {
+                println!("Client : Connecté au serveur QUIC. En attente de l'ouverture du flux...");
+                state.connection = Some(conn);
             }
+            GameNetworkEvent::StreamCreated(conn, stream) => {
+                if !state.joined && stream.is_reliable() {
+                    println!("Client : Flux Fiable reçu. Envoi de la requête de connexion (Join)...");
+                    state.joined = true; // Verrouillage pour empêcher la boucle
+
+                    let packet = ClientPacket::Join {
+                        username: "TestPlayer_01".to_string(),
+                    };
+
+                    let encoded_data = bitcode::encode(&packet);
+                    if let Err(e) = state.peer.send(&conn, &stream, Bytes::from(encoded_data)) {
+                        eprintln!("Client : Échec de l'envoi du paquet: {:?}", e);
+                    }
+                } else {
+                    println!("Client : Flux supplémentaire reçu (Fiable: {}). Réservé aux données du jeu.", stream.is_reliable());
+                }
+            }
+            GameNetworkEvent::Message { data, .. } => {
+                // Décodage de la réponse du serveur
+                if let Ok(packet) = bitcode::decode::<ServerPacket>(&data) {
+                    match packet {
+                        ServerPacket::Welcome { player_id } => {
+                            println!("Client : Succès ! Le serveur m'a assigné l'ID : {}", player_id);
+                        }
+                        ServerPacket::RejectedFull => {
+                            println!("Client : Connexion refusée (Serveur plein).");
+                            exit.write(AppExit::Success);
+                        }
+                        ServerPacket::SyncPositions(players) => {
+                            println!("--- Snapshot Serveur : {} joueur(s) ---", players.len());
+                            for player in players {
+                                println!(
+                                    " > Entité [{}] - Position: X={:.2}, Y={:.2}",
+                                    player.entity_bits,
+                                    player.position[0],
+                                    player.position[1]
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("Client : Échec du décodage du paquet serveur.");
+                }
+            }
+            GameNetworkEvent::Disconnected(_) => {
+                println!("Client : Déconnecté par le serveur.");
+                exit.write(AppExit::Success);
+            }
+            GameNetworkEvent::Error { inner, .. } => {
+                eprintln!("Client : Erreur protocole : {:?}", inner);
+            }
+            _ => {}
+        },
+        Ok(None) => break,
+        Err(e) => {
+            eprintln!("Client : Erreur fatale de polling : {:?}", e);
+            break;
         }
     }
 }
