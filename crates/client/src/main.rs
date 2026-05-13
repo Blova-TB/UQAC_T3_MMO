@@ -18,6 +18,18 @@ pub enum ClientPacket {
 pub enum ServerPacket {
     Welcome { player_id: u64 },
     RejectedFull,
+    SyncPositions(Vec<PlayerPositionData>),
+}
+
+#[derive(Encode, Decode, Debug)]
+pub struct ServerSyncMessage {
+    pub players: Vec<PlayerPositionData>,
+}
+
+#[derive(Encode, Decode, Debug)]
+pub struct PlayerPositionData {
+    pub entity_bits: u64,
+    pub position: [f32; 2],
 }
 
 // --- État du client ---
@@ -26,6 +38,7 @@ pub enum ServerPacket {
 pub struct ClientState {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
+    pub joined: bool,
 }
 
 fn main() {
@@ -50,6 +63,7 @@ fn setup_client(mut commands: Commands) {
     commands.insert_resource(ClientState {
         peer,
         connection: None,
+        joined: false,
     });
 
     println!("Client : Tentative de connexion au serveur 127.0.0.1:5000...");
@@ -64,16 +78,20 @@ fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExi
                     state.connection = Some(conn);
                 }
                 GameNetworkEvent::StreamCreated(conn, stream) => {
-                    // Le serveur a créé le flux (cf. logique serveur). Le client l'utilise pour envoyer le JOIN.
-                    println!("Client : Flux reçu. Envoi de la requête de connexion (Join)...");
+                    if !state.joined && stream.is_reliable() {
+                        println!("Client : Flux Fiable reçu. Envoi de la requête de connexion (Join)...");
+                        state.joined = true; // Verrouillage pour empêcher la boucle
 
-                    let packet = ClientPacket::Join {
-                        username: "TestPlayer_01".to_string(),
-                    };
+                        let packet = ClientPacket::Join {
+                            username: "TestPlayer_01".to_string(),
+                        };
 
-                    let encoded_data = bitcode::encode(&packet);
-                    if let Err(e) = state.peer.send(&conn, &stream, Bytes::from(encoded_data)) {
-                        eprintln!("Client : Échec de l'envoi du paquet: {:?}", e);
+                        let encoded_data = bitcode::encode(&packet);
+                        if let Err(e) = state.peer.send(&conn, &stream, Bytes::from(encoded_data)) {
+                            eprintln!("Client : Échec de l'envoi du paquet: {:?}", e);
+                        }
+                    } else {
+                        println!("Client : Flux supplémentaire reçu (Fiable: {}). Réservé aux données du jeu.", stream.is_reliable());
                     }
                 }
                 GameNetworkEvent::Message { data, .. } => {
@@ -87,7 +105,20 @@ fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExi
                                 println!("Client : Connexion refusée (Serveur plein).");
                                 exit.write(AppExit::Success);
                             }
+                            ServerPacket::SyncPositions(players) => {
+                                println!("--- Snapshot Serveur : {} joueur(s) ---", players.len());
+                                for player in players {
+                                    println!(
+                                        " > Entité [{}] - Position: X={:.2}, Y={:.2}",
+                                        player.entity_bits,
+                                        player.position[0],
+                                        player.position[1]
+                                    );
+                                }
+                            }
                         }
+                    } else {
+                        eprintln!("Client : Échec du décodage du paquet serveur.");
                     }
                 }
                 GameNetworkEvent::Disconnected(_) => {

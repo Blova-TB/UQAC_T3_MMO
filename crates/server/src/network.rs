@@ -13,16 +13,22 @@ use crate::player::Player;
 pub struct NetworkServerPlugin;
 
 impl Plugin for NetworkServerPlugin {
-    fn build(&self, app: &mut App) { 
+    fn build(&self, app: &mut App) {
         app
             .insert_resource(ServerConfig::from_env())
             .init_resource::<PlayerRegistry>()
+            .init_resource::<NetworkEncoder>()
             .insert_resource(HeartbeatTimer(Timer::from_seconds(
                 5.0,
                 TimerMode::Repeating,
             )))
             .add_systems(Startup, bind_sockets)
-            .add_systems(Update, (receive_packets, send_heartbeat, debug_print).chain());
+            .add_systems(Update, (
+                receive_packets,
+                broadcast_positions,
+                send_heartbeat,
+            ).chain())
+        ;
     }
 }
 
@@ -86,6 +92,7 @@ pub enum ClientPacket {
 pub enum ServerPacket {
     Welcome { player_id: u64 },
     RejectedFull,
+    SyncPositions(Vec<PlayerPositionData>),
 }
 
 // pour l'Orchestrateur
@@ -154,15 +161,17 @@ fn receive_packets(
         match network.peer.poll() {
             Ok(Some(event)) => match event {
                 GameNetworkEvent::Connected(conn) => {
-                    // Ouverture immédiate d'un stream fiable pour les paquets système (Join/Welcome)
+                    println!("Nouvelle connexion : {:?}", conn.connection_id);
                     let _ = network.peer.create_stream(conn, GameStreamReliability::Reliable);
                 }
                 GameNetworkEvent::Disconnected(conn) => {
+                    println!("Déconnexion : {:?}", conn.connection_id);
                     if let Some(session) = registry.players.remove(&conn) {
                         commands.entity(session.entity).despawn();
                     }
                 }
                 GameNetworkEvent::StreamCreated(conn, stream) => {
+                    println!("Stream créé pour {:?} (Fiable: {})", conn.connection_id, stream.is_reliable());
                     // Enregistrement du flux pour les paquets de position
                     if let Some(session) = registry.players.get_mut(&conn) {
                         if !stream.is_reliable() {
@@ -171,9 +180,16 @@ fn receive_packets(
                     }
                 }
                 GameNetworkEvent::Message { connection, stream, data } => {
+                    println!("Message reçu de {:?} (Stream ID: {}, Fiable: {})", connection.connection_id, stream.stream_id, stream.is_reliable());
                     if let Ok(packet) = bitcode::decode::<ClientPacket>(&data) {
                         match packet {
                             ClientPacket::Join { username } => {
+
+                                if registry.players.contains_key(&connection) {
+                                    println!("Avertissement : Le client {:?} a tenté un double Join. Requête ignorée.", connection.connection_id);
+                                    continue;
+                                }
+
                                 if registry.players.len() >= config.max_players {
                                     let reject = bitcode::encode(&ServerPacket::RejectedFull);
                                     let _ = network.peer.send(&connection, &stream, Bytes::from(reject));
@@ -273,18 +289,17 @@ fn broadcast_positions(
         return;
     }
 
-    let mut sync_msg = ServerSyncMessage {
-        players: Vec::with_capacity(query.iter().len()),
-    };
+    let mut players_data = Vec::with_capacity(query.iter().len());
 
     for (entity, transform) in query.iter() {
-        sync_msg.players.push(PlayerPositionData {
+        players_data.push(PlayerPositionData {
             entity_bits: entity.to_bits(),
-            position: transform.translation.truncate().to_array(), // Conversion en [f32; 2]
+            position: transform.translation.truncate().to_array(),
         });
     }
 
-    let encoded_data = encoder.buffer.encode(&sync_msg);
+    let sync_packet = ServerPacket::SyncPositions(players_data);
+    let encoded_data = encoder.buffer.encode(&sync_packet);
     let serialized_bytes = Bytes::copy_from_slice(encoded_data);
 
     for (conn, client_data) in clients.players.iter() {
@@ -294,8 +309,4 @@ fn broadcast_positions(
             }
         }
     }
-}
-
-fn debug_print(registry: Res<PlayerRegistry>) {
-    println!("Players connected: {}", registry.players.len());
 }
