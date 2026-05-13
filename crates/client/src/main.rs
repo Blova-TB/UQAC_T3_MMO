@@ -129,10 +129,9 @@ fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExi
             }
             _ => {}
         },
-        Ok(None) => break,
+        Ok(None) => {}
         Err(e) => {
             eprintln!("Client : Erreur fatale de polling : {:?}", e);
-            break;
         }
     }
 }
