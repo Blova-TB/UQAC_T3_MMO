@@ -8,6 +8,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
+
 # Optimisation globale pour les builds en release (impacte tous les crates)
 [profile.release]
 opt-level = 3
