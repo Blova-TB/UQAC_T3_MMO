@@ -7,6 +7,21 @@ services:
       - "8081:3000"
     networks:
       - game-network
+    environment:
+      CONNECTIONS: con1,con2
+      # Postgres
+      LABEL_con1: Postgres
+      ENGINE_con1: postgres@dbgate-plugin-postgres
+      SERVER_con1: db
+      USER_con1: mmo_admin
+      PASSWORD_con1: password123
+      PORT_con1: 5432
+      DATABASE_con1: gatekeeper_db
+      # Redis
+      LABEL_con2: Redis
+      ENGINE_con2: redis@dbgate-plugin-redis
+      SERVER_con2: redis
+      PORT_con2: 6379
   db:
     image: postgres:15-alpine
     environment:
