@@ -4,4 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bcrypt = "0.19.1"
+jsonwebtoken = "10.4.0"
 rocket = "0.5.1"
+serde = { workspace = true }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "macros"] }

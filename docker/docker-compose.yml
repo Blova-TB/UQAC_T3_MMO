@@ -1,6 +1,28 @@
 ﻿version: '3.8'
 
 services:
+  dbgate:
+    image: dbgate/dbgate
+    ports:
+      - "8081:3000"
+    networks:
+      - game-network
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: mmo_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: gatekeeper_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./crates/gatekeeper/migrations/0001_users_table.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - game-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U mmo_admin -d gatekeeper_db" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
   orchestrator:
     build:
       context: .. # Crucial : Remonte à la racine du projet pour lire le Workspace
@@ -16,9 +38,13 @@ services:
     build:
       context: ..
       dockerfile: docker/gatekeeper.Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
+      - DATABASE_URL=postgres://mmo_admin:password123@db:5432/gatekeeper_db
       - RUST_LOG=info
       - ROCKET_ADDRESS=0.0.0.0
       - ROCKET_PORT=3000
@@ -29,3 +55,6 @@ networks:
   game-network:
     driver: bridge
   # Le server n'est pas instancié ici, l'orchestrateur le fera via l'API Docker.
+
+volumes:
+  postgres_data:

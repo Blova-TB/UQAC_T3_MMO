@@ -1,17 +1,29 @@
 #[macro_use] extern crate rocket;
+use sqlx::postgres::PgPoolOptions;
 
-#[get("/health")]
-fn health_check() -> &'static str {
-    "OK"
+
+#[get("/register")]
+fn register() -> &'static str {
+    "Register"
 }
 
-#[get("/servers")]
-fn list_servers() -> &'static str {
-    "Liste des serveurs de jeu"
+#[get("/login")]
+fn login() -> &'static str {
+    "Login"
 }
 
 #[launch]
-fn rocket() -> _ {
+async fn rocket() -> _ {
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to Postgres");
+
     rocket::build()
-        .mount("/", routes![health_check, list_servers])
+        .manage(pool)
+        .mount("/", routes![register, login])
 }
