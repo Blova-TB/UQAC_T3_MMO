@@ -9,6 +9,7 @@ dev = ["bevy/dynamic_linking"]
 [dependencies]
 bevy = { version = "0.18.1", default-features = false, features = [
     "bevy_log",
+    "debug",
     "bevy_state"
 ] }
 avian2d = "0.6"

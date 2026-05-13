@@ -7,7 +7,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_initial_player);
+        app.add_systems(Startup, (spawn_initial_player,apply_forces).chain());
     }
 }
 
@@ -29,8 +29,12 @@ pub struct PlayerBundle {
     player: Player,
     health: Health,
     speed: MovementSpeed,
+
     rigid_body: RigidBody,
     collider: Collider,
+    linear_damping: LinearDamping,
+    locked_axes: LockedAxes,
+
     transform: Transform,
     global_transform: GlobalTransform,
 }
@@ -41,8 +45,12 @@ impl PlayerBundle {
             player: Player,
             health: Health(health),
             speed: MovementSpeed(speed),
+
             rigid_body: RigidBody::Dynamic,
             collider: Collider::circle(radius),
+            linear_damping: LinearDamping(5.0),
+            locked_axes: LockedAxes::ROTATION_LOCKED,
+
             transform: Transform::from_translation(position.extend(0.0)),
             global_transform: GlobalTransform::default(),
         }
@@ -62,4 +70,10 @@ pub fn spawn_initial_player(mut commands: Commands) {
     ));
 
     println!("Player spawned at {:?}", start_position);
+}
+
+fn apply_forces(mut query: Query<Forces>) {
+    for mut forces in &mut query {
+        forces.apply_linear_impulse(Vec2::new(0.0, 1000.0));
+    }
 }
