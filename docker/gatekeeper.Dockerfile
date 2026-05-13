@@ -1,14 +1,17 @@
-﻿# Stage 1: Build
-FROM rust:latest AS builder
+﻿FROM rust:latest AS builder
 WORKDIR /app
-# Copie de tout le workspace (nécessaire pour les dépendances locales comme 'shared')
+
+ENV SQLX_OFFLINE=true
+
 COPY . .
 RUN cargo build --release --bin gatekeeper
 
-# Stage 2: Runtime
 FROM debian:bookworm-slim
 WORKDIR /app
-# On ne récupère que le binaire compilé
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/target/release/gatekeeper .
+
 EXPOSE 3000
 CMD ["./gatekeeper"]

@@ -1,29 +1,33 @@
-#[macro_use] extern crate rocket;
-use sqlx::postgres::PgPoolOptions;
+#[macro_use]
+extern crate rocket;
 
+mod auth;
+mod jwt;
+mod models;
+mod routes;
 
-#[get("/register")]
-fn register() -> &'static str {
-    "Register"
-}
+use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
-#[get("/login")]
-fn login() -> &'static str {
-    "Login"
+use crate::routes::{get_me, login, register};
+
+async fn create_pool(database_url: &str) -> Result<Pool<Postgres>, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(5)
+        .connect(database_url)
+        .await
 }
 
 #[launch]
 async fn rocket() -> _ {
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
+    let pool = create_pool(&database_url)
         .await
         .expect("Failed to connect to Postgres");
 
     rocket::build()
         .manage(pool)
-        .mount("/", routes![register, login])
+        .manage(jwt_secret)
+        .mount("/", routes![register, login, get_me])
 }
