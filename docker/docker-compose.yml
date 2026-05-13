@@ -12,10 +12,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - RUST_LOG=info
-  gateway:
+  gatekeeper:
     build:
       context: ..
-      dockerfile: docker/gateway.Dockerfile
+      dockerfile: docker/gatekeeper.Dockerfile
     ports:
       - "3000:3000"
     networks:
