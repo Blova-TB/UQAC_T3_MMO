@@ -7,7 +7,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_initial_player,apply_forces).chain());
+        //app.add_systems(Startup, (spawn_initial_player,apply_forces).chain());
     }
 }
 
