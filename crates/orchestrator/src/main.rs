@@ -1,5 +1,4 @@
 mod db;
-mod api;
 
 use db::{Database, ServerInfo};
 use std::net::SocketAddr;
@@ -28,15 +27,4 @@ async fn main() {
 
     database.save_server(&mock_server).await.expect("Échec de la sauvegarde");
     println!("✅ Serveur mocké sauvegardé en BDD.");
-
-    // 3. Lancement de l'API Axum (ceci bloque le thread et maintient le conteneur en vie)
-    let app = api::build_router(database);
-    let addr = SocketAddr::from(([0, 0, 0, 0], 4000));
-
-    println!("🚀 API Orchestrateur en écoute sur {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-
-    if let Err(e) = axum::serve(listener, app).await {
-        eprintln!("Erreur du serveur HTTP : {}", e);
-    }
 }
