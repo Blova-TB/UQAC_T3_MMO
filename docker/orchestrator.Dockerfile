@@ -9,15 +9,15 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/shared/Cargo.toml crates/shared/
 COPY crates/server/Cargo.toml crates/server/
 COPY crates/client/Cargo.toml crates/client/
-COPY crates/gateway/Cargo.toml crates/gateway/
+COPY crates/gatekeeper/Cargo.toml crates/gatekeeper/
 COPY crates/orchestrator/Cargo.toml crates/orchestrator/
 
-RUN mkdir -p crates/shared/src crates/server/src crates/client/src crates/gateway/src crates/orchestrator/src && \
+RUN mkdir -p crates/shared/src crates/server/src crates/client/src crates/gatekeeper/src crates/orchestrator/src && \
     touch crates/shared/src/lib.rs && \
     echo "fn main() {}" > crates/server/src/main.rs && \
     echo "fn main() {}" > crates/client/src/main.rs && \
     echo "fn main() {}" > crates/orchestrator/src/main.rs && \
-    echo "fn main() {}" > crates/gateway/src/main.rs
+    echo "fn main() {}" > crates/gatekeeper/src/main.rs
 
 RUN cargo build --release -p orchestrator
 

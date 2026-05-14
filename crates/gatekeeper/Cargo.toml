@@ -1,0 +1,13 @@
+[package]
+name = "gatekeeper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bcrypt = "0.19.1"
+base64 = "0.22"
+chrono = "0.4"
+jsonwebtoken = { version = "10.4", features = ["rust_crypto"] }
+rocket = { version = "0.5.1", features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "uuid"] }
