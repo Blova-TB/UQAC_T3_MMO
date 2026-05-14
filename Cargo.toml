@@ -4,9 +4,13 @@ members = [
     "crates/client",
     "crates/server",
     "crates/orchestrator",
-    "crates/gateway"
+    "crates/gatekeeper"
 ]
 resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
+serde = "1.0.228"
 
 [profile.dev]
 opt-level = 1

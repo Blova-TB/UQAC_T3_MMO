@@ -1,6 +1,45 @@
 ﻿version: '3.8'
 
 services:
+  dbgate:
+    image: dbgate/dbgate
+    ports:
+      - "8081:3000"
+    networks:
+      - game-network
+    environment:
+      CONNECTIONS: con1,con2
+      # Postgres
+      LABEL_con1: Postgres
+      ENGINE_con1: postgres@dbgate-plugin-postgres
+      SERVER_con1: db
+      USER_con1: mmo_admin
+      PASSWORD_con1: password123
+      PORT_con1: 5432
+      DATABASE_con1: gatekeeper_db
+      # Redis
+      LABEL_con2: Redis
+      ENGINE_con2: redis@dbgate-plugin-redis
+      SERVER_con2: redis
+      PORT_con2: 6379
+  db:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mmo_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: gatekeeper_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./crates/gatekeeper/migrations/0001_users_table.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - game-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U mmo_admin -d gatekeeper_db" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
   orchestrator:
     build:
       context: ..
@@ -8,17 +47,27 @@ services:
     ports:
       - "4000:4000"
     environment:
+      - RUST_LOG=info
       - REDIS_URL=redis://redis:6379/
     depends_on:
       - redis
     networks:
       - game-network
-  gateway:
+  gatekeeper:
     build:
       context: ..
-      dockerfile: docker/gateway.Dockerfile
+      dockerfile: docker/gatekeeper.Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "3000:3000"
+    environment:
+      - DATABASE_URL=postgres://mmo_admin:password123@db:5432/gatekeeper_db
+      - RUST_LOG=info
+      - ROCKET_ADDRESS=0.0.0.0
+      - ROCKET_PORT=3000
+      - JWT_SECRET=fautchangercaenprod
     networks:
       - game-network
   redis:
@@ -32,3 +81,6 @@ networks:
   game-network:
     driver: bridge
   # Le server n'est pas instancié ici, l'orchestrateur le fera via l'API Docker.
+
+volumes:
+  postgres_data:
