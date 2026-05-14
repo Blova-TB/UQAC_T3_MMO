@@ -23,7 +23,9 @@ services:
       SERVER_con2: redis
       PORT_con2: 6379
   db:
-    image: postgres:15-alpine
+    build:
+      context: .
+      dockerfile: postgres.Dockerfile
     ports:
       - "5432:5432"
     environment:
@@ -32,7 +34,7 @@ services:
       POSTGRES_DB: gatekeeper_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./crates/gatekeeper/migrations/0001_users_table.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../crates/gatekeeper/migrations:/migrations:ro
     networks:
       - game-network
     healthcheck:
@@ -76,6 +78,7 @@ services:
       - "6379:6379"
     networks:
       - game-network
+
 
 networks:
   game-network:
