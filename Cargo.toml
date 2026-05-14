@@ -12,6 +12,12 @@ resolver = "2"
 tokio = { version = "1.52.3", features = ["full"] }
 serde = "1.0.228"
 
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 # Optimisation globale pour les builds en release (impacte tous les crates)
 [profile.release]
 opt-level = 3
