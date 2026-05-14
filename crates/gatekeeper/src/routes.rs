@@ -4,7 +4,7 @@ use rocket::State;
 use rocket::serde::json::Json;
 use sqlx::{Pool, Postgres, Row, types::Uuid};
 
-use crate::{auth::{AuthenticatedUser, BasicCredentials}, jwt::create_jwt, models::AuthRequest};
+use crate::{jwt::create_jwt, models::{AuthRequest, AuthenticatedUser, BasicCredentials}};
 
 #[post("/register", data = "<user_data>")]
 pub async fn register(

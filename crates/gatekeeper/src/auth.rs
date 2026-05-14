@@ -3,17 +3,7 @@ use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome, Request};
 
 use crate::jwt::decode_jwt;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BasicCredentials {
-    pub username: String,
-    pub password: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthenticatedUser {
-    pub user_id: String,
-}
+use crate::models::{AuthenticatedUser, BasicCredentials};
 
 fn parse_basic_credentials(header: &str) -> Option<BasicCredentials> {
     let encoded = header.strip_prefix("Basic ")?;
