@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bcrypt = "0.19.1"
+base64 = "0.22"
 chrono = "0.4"
 jsonwebtoken = { version = "10.4", features = ["rust_crypto"] }
 rocket = { version = "0.5.1", features = ["json"] }
