@@ -45,6 +45,13 @@ services:
       timeout: 5s
       retries: 5
 
+  server-builder:
+    build:
+      context: ..
+      dockerfile: docker/server.Dockerfile
+    image: uqac_t3_mmo-server:local
+    command: ["echo", "✅ Build de l'image du serveur terminé avec succès !"]
+
   orchestrator:
     build:
       context: ..
@@ -55,7 +62,10 @@ services:
       - RUST_LOG=${RUST_LOG}
       - REDIS_URL=${REDIS_URL}
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      server-builder:
+        condition: service_completed_successfully
     networks:
       - game-network
     volumes:
@@ -90,6 +100,7 @@ services:
 networks:
   game-network:
     driver: bridge
+    name: game-network
 
 volumes:
   postgres_data:
