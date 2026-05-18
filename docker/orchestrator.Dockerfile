@@ -18,7 +18,7 @@ RUN mkdir -p crates/shared/src crates/gatekeeper/src crates/server/src crates/cl
     echo "fn main() {}" > crates/orchestrator/src/main.rs && \
     cargo build --release -p gatekeeper
 
-
+COPY crates/shared ./crates/shared
 COPY crates/orchestrator ./crates/orchestrator
 
 RUN touch crates/orchestrator/src/main.rs && \

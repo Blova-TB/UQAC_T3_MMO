@@ -39,7 +39,6 @@ services:
     networks:
       - game-network
     healthcheck:
-      # L'interpolation fonctionne aussi dans les commandes shell du compose !
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 5s
       timeout: 5s

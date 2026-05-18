@@ -3,11 +3,18 @@ use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Status {
+    Starting,
+    Connected,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerInfo {
     pub container_id: String,
     pub address: String,
     pub players_online: u32,
     pub max_players: u32,
+    pub status: Status,
 }
 
 #[derive(Clone)]
@@ -23,11 +30,21 @@ impl Database {
     }
 
     /// Utilise HSET pour ranger le serveur dans un "dossier" global
-    pub async fn save_server(&self, server: &ServerInfo) -> Result<(), redis::RedisError> {
+    pub async fn save_server(
+        &self,
+        server: &ServerInfo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut conn = self.conn.clone();
-        let json = serde_json::to_string(server).unwrap();
-        // Clé principale: "servers_hash" | Sous-clé: container_id | Valeur: JSON
-        conn.hset("servers_hash", &server.container_id, json).await
+
+        // Sécurisation de la sérialisation
+        let json = serde_json::to_string(server)?;
+
+        // 🌟 CORRECTION ICI : On assigne le résultat à `_` en forçant le type `()`.
+        // Cela dit au compilateur : "Exécute la requête, propage l'erreur si besoin avec `?`,
+        // mais je me fiche de la valeur de retour (true/false), traite-la comme vide".
+        let _: () = conn.hset("servers_hash", &server.container_id, json).await?;
+
+        Ok(())
     }
 
     /// L'algorithme de Matchmaking (Recherche du meilleur serveur)
