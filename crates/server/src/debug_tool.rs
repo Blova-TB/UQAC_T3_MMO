@@ -1,6 +1,6 @@
 ﻿use bevy::prelude::*;
 use crate::player::Player;
-use crate::network::PlayerRegistry;
+use crate::network_plugin::PlayerRegistry;
 
 pub struct DebugToolPlugin;
 

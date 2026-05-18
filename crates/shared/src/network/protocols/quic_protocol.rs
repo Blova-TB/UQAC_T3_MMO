@@ -207,7 +207,12 @@ impl GameSocketBackend for QuicBackend {
                                     }
                                 }
                             }
-                            BackendCommand::Shutdown => break,
+                            BackendCommand::Shutdown => {
+                                for conn in self.connections.values() {
+                                    conn.close(0u32.into(), b"Server shutting down");
+                                }
+                                break;
+                            },
                             BackendCommand::CreateStream { connection, stream, reliability } => {
                                 if reliability == GameStreamReliability::Reliable {
                                     if let Some(conn) = self.connections.get(&connection) {
@@ -271,6 +276,7 @@ impl QuicBackend {
                     data: b,
                 });
             }
+            let _ = event_tx_clone.send(GameNetworkEvent::Disconnected(uuid.into()));
         });
 
         // Stream Reader

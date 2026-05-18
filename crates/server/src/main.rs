@@ -1,17 +1,20 @@
 mod player;
 mod debug_tool;
-mod network;
+mod network_plugin;
+mod orchestrator_plugin;
+mod config;
 
 use player::PlayerPlugin;
 use debug_tool::DebugToolPlugin;
-use network::NetworkServerPlugin;
+use network_plugin::NetworkServerPlugin;
 
 use bevy::prelude::*;
 use avian2d::prelude::*;
 use bevy::app::ScheduleRunnerPlugin;
 use std::time::Duration;
 use bevy::scene::ScenePlugin;
-
+use crate::orchestrator_plugin::OrchestratorPlugin;
+use config::ServerConfig;
 
 fn main() {
     App::new()
@@ -23,10 +26,12 @@ fn main() {
             PhysicsPlugins::default(),
         ))
         .add_plugins((
+            OrchestratorPlugin,
             NetworkServerPlugin,
             PlayerPlugin,
             DebugToolPlugin,
         ))
         .insert_resource(Gravity(Vec2::ZERO))
+        .insert_resource(ServerConfig::from_env())
         .run();
 }

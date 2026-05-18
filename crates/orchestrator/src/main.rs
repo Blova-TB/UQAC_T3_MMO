@@ -1,42 +1,179 @@
+//
 mod db;
-mod api;
+mod docker;
 
 use db::{Database, ServerInfo};
-use std::net::SocketAddr;
+use docker::DockerOrchestrator;
+use serde::Deserialize;
+use shared::network::protocols::QuicBackend;
+use shared::network::{GameNetworkEvent, GamePeer};
+use shared::constants::STREAM_HEARTBEAT;
+use shared::models::Status;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
+use tokio::signal;
+
+#[derive(Deserialize)]
+pub struct HeartbeatPayload {
+    pub id: String,
+    pub player_count: usize,
+    pub max_players: usize,
+    pub status: Status,
+}
 
 #[tokio::main]
-async fn main() {
-    // 1. Récupération de l'URL via variable d'environnement (avec fallback pour le local)
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+    let min_available_servers: usize = std::env::var("MIN_AVAILABLE_SERVERS")
+        .unwrap_or_else(|_| "2".to_string())
+        .parse()
+        .expect("MIN_AVAILABLE_SERVERS doit être un entier");
 
-    println!("Connexion à Redis sur {}...", redis_url);
-
-    let database = match Database::new(&redis_url).await {
-        Ok(db) => db,
-        Err(e) => panic!("Erreur de connexion Redis : {}", e),
-    };
-
+    let database = Database::new(&redis_url).await?;
     println!("✅ Connecté à Redis !");
 
-    // 2. Mock initial (pour tes tests)
-    let mock_server = ServerInfo {
-        container_id: "shard-01".to_string(),
-        address: "127.0.0.1:5001".to_string(),
-        players_online: 0,
-        max_players: 100,
-    };
+    let mut orchestrator_peer = GamePeer::new(QuicBackend::new());
+    orchestrator_peer.listen("0.0.0.0", 4000)?;
+    println!("🎧 Orchestrateur en écoute (QUIC) sur 0.0.0.0:4000");
 
-    database.save_server(&mock_server).await.expect("Échec de la sauvegarde");
-    println!("✅ Serveur mocké sauvegardé en BDD.");
+    let docker_manager = Arc::new(DockerOrchestrator::new().await?);
 
-    // 3. Lancement de l'API Axum (ceci bloque le thread et maintient le conteneur en vie)
-    let app = api::build_router(database);
-    let addr = SocketAddr::from(([0, 0, 0, 0], 4000));
+    let mut autoscale_timer = tokio::time::interval(Duration::from_secs(10));
 
-    println!("🚀 API Orchestrateur en écoute sur {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
 
-    if let Err(e) = axum::serve(listener, app).await {
-        eprintln!("Erreur du serveur HTTP : {}", e);
+    println!("🛡️ L'orchestrateur (Auto-Scaling: {}) est en ligne. (CTRL+C pour quitter)", min_available_servers);
+
+    loop {
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                println!("\n🛑 Signal d'arrêt reçu, fermeture...");
+                let _ = orchestrator_peer.shutdown();
+                break;
+            }
+
+            _ = autoscale_timer.tick() => {
+                if let Ok(servers) = database.get_all_servers().await {
+
+                    let available_count = servers.iter().filter(|s| {
+                        (s.status == Status::Starting || s.status == Status::Online)
+                        && s.players_online < s.max_players
+                    }).count();
+
+                    if available_count < min_available_servers {
+                        let to_spawn = min_available_servers - available_count;
+                        println!("⚖️ [Auto-Scaler] {}/{} serveurs dispos. Démarrage de {} instance(s)...",
+                            available_count, min_available_servers, to_spawn);
+
+                        let mut used_ports = HashSet::new();
+                        for server in &servers {
+                            if let Some(port_str) = server.address.split(':').last() {
+                                if let Ok(p) = port_str.parse::<u16>() {
+                                    used_ports.insert(p);
+                                }
+                            }
+                        }
+                        for _ in 0..to_spawn {
+                            let mut selected_port = None;
+                            for port in 4001..=5000 {
+                                if !used_ports.contains(&port) {
+                                    selected_port = Some(port);
+                                    used_ports.insert(port);
+                                    break;
+                                }
+                            }
+
+                            if let Some(port) = selected_port {
+                                let container_name = format!("game-shard-{}", port);
+
+                                let docker_clone = docker_manager.clone();
+                                let db_clone = database.clone();
+
+                                tokio::spawn(async move {
+                                    match docker_clone.spawn_game_server(&container_name, "uqac_t3_mmo-server:local", &port.to_string()).await {
+                                        Ok((_, server_id)) => {
+                                            let server_info = ServerInfo {
+                                                container_id: server_id,
+                                                address: format!("127.0.0.1:{}", port),
+                                                players_online: 0,
+                                                max_players: 100,
+                                                status: Status::Starting,
+                                            };
+                                            let _ = db_clone.save_server(&server_info).await;
+                                            println!("🚀 Instance '{}' lancée avec succès sur le port recyclé {}", container_name, port);
+                                        },
+                                        Err(e) => eprintln!("❌ Échec lancement {} : {}", container_name, e),
+                                    }
+                                });
+                            } else {
+                                eprintln!("🚨 [CRITIQUE] Aucun port UDP libre trouvé dans la plage 4001-5000 !");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                while let Ok(Some(event)) = orchestrator_peer.poll() {
+                    match event {
+                        GameNetworkEvent::Message { connection, stream, data } => {
+                            let raw_stream_id = stream.stream_id >> 2;
+
+                            match raw_stream_id {
+                                STREAM_HEARTBEAT => {
+                                    if let Ok(json_str) = String::from_utf8(data.to_vec()) {
+                                        if let Ok(payload) = serde_json::from_str::<HeartbeatPayload>(&json_str) {
+
+                                            active_sessions.insert(connection.connection_id, payload.id.clone());
+
+                                            if let Ok(servers) = database.get_all_servers().await {
+                                                if let Some(existing) = servers.iter().find(|s| s.container_id == payload.id) {
+                                                    let updated_info = ServerInfo {
+                                                        container_id: payload.id.clone(),
+                                                        address: existing.address.clone(),
+                                                        players_online: payload.player_count,
+                                                        max_players: payload.max_players,
+                                                        status: payload.status,
+                                                    };
+                                                    let _ = database.save_server(&updated_info).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        GameNetworkEvent::Disconnected(conn) => {
+                            println!("💔 Déconnexion QUIC détectée pour la connexion {:?}", conn.connection_id);
+
+                            if let Some(server_id) = active_sessions.remove(&conn.connection_id) {
+                                let db_clone = database.clone();
+                                let docker_clone = docker_manager.clone();
+
+                                tokio::spawn(async move {
+                                    if let Ok(servers) = db_clone.get_all_servers().await {
+                                        if let Some(server) = servers.iter().find(|s| s.container_id == server_id) {
+                                            if let Some(port_str) = server.address.split(':').last() {
+                                                let container_name = format!("game-shard-{}", port_str);
+                                                let _ = docker_clone.remove_game_server(&container_name).await;
+                                            }
+                                        }
+                                    }
+                                    let _ = db_clone.remove_server(&server_id).await;
+                                    println!("🧹 Nettoyage complet (Redis + Docker) terminé pour le serveur {}", server_id);
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
+    Ok(())
 }

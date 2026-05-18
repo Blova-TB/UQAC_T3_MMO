@@ -2,38 +2,40 @@
 FROM rust:latest AS builder
 WORKDIR /app
 
-# L'orchestrateur n'a généralement pas besoin de libudev-dev (lié à Bevy)
-RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
-
 COPY Cargo.toml Cargo.lock ./
 COPY crates/shared/Cargo.toml crates/shared/
+COPY crates/gatekeeper/Cargo.toml crates/gatekeeper/
 COPY crates/server/Cargo.toml crates/server/
 COPY crates/client/Cargo.toml crates/client/
-COPY crates/gatekeeper/Cargo.toml crates/gatekeeper/
 COPY crates/orchestrator/Cargo.toml crates/orchestrator/
 
-RUN mkdir -p crates/shared/src crates/server/src crates/client/src crates/gatekeeper/src crates/orchestrator/src && \
+# 2. Créer des fichiers factices pour TOUT le workspace
+RUN mkdir -p crates/shared/src crates/gatekeeper/src crates/server/src crates/client/src crates/orchestrator/src && \
     touch crates/shared/src/lib.rs && \
+    echo "fn main() {}" > crates/gatekeeper/src/main.rs && \
     echo "fn main() {}" > crates/server/src/main.rs && \
     echo "fn main() {}" > crates/client/src/main.rs && \
     echo "fn main() {}" > crates/orchestrator/src/main.rs && \
-    echo "fn main() {}" > crates/gatekeeper/src/main.rs
+    cargo build --release -p gatekeeper
 
-RUN cargo build --release -p orchestrator
+COPY crates/shared ./crates/shared
+COPY crates/orchestrator ./crates/orchestrator
 
-COPY crates ./crates
-RUN touch crates/orchestrator/src/main.rs
-RUN cargo build --release -p orchestrator
+RUN touch crates/orchestrator/src/main.rs && \
+    cargo build --release -p orchestrator
 
 # --- Stage 2: Runtime ---
 FROM debian:bookworm-slim
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# IMPORTANT : On installe 'docker.io' pour que l'orchestrateur puisse builder le serveur
+RUN apt-get update && \
+    apt-get install -y ca-certificates docker.io && \
+    rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/orchestrator /app/orchestrator
+COPY --from=builder /app/target/release/orchestrator /usr/local/bin/orchestrator
 
-# Exposition de l'API HTTP/gRPC de l'orchestrateur
 EXPOSE 8080/tcp
+EXPOSE 4000/tcp
 
-CMD ["./orchestrator"]
+CMD ["orchestrator"]
