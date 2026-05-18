@@ -2,7 +2,7 @@
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use shared::models::Status;
-use anyhow::{Context, Result};
+use anyhow::{Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerInfo {
@@ -15,22 +15,38 @@ pub struct ServerInfo {
 
 #[derive(Clone)]
 pub struct Database {
-    conn: MultiplexedConnection,
+    pub client: redis::Client,
+    pub conn: MultiplexedConnection,
 }
 
 impl Database {
     pub async fn new(redis_url: &str) -> Result<Self> {
-        let client = redis::Client::open(redis_url)
-            .context("L'URL Redis est mal formatée")?;
-        let conn = client.get_multiplexed_async_connection().await
-            .context("Impossible d'établir la connexion TCP avec Redis")?;
-        Ok(Self { conn })
+        let client = redis::Client::open(redis_url)?;
+        let conn = client.get_multiplexed_async_connection().await?;
+        Ok(Self { client, conn })
     }
 
     pub async fn save_server(&self, server: &ServerInfo) -> Result<()> {
         let mut conn = self.conn.clone();
         let json = serde_json::to_string(server)?;
+
         let _: () = conn.hset("servers_hash", &server.container_id, json).await?;
+
+        if let Some(port) = server.address.split(':').last() {
+            let shadow_key = format!("heartbeat:{}:{}", server.container_id, port);
+            let _: () = conn.set_ex(shadow_key, "1", 30).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_server(&self, container_id: &str, port: &str) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn.hdel("servers_hash", container_id).await?;
+
+        let shadow_key = format!("heartbeat:{}:{}", container_id, port);
+        let _: () = conn.del(shadow_key).await?;
+
         Ok(())
     }
 
@@ -44,12 +60,5 @@ impl Database {
             .collect();
 
         Ok(servers)
-    }
-
-    pub async fn remove_server(&self, container_id: &str) -> anyhow::Result<()> {
-        let mut conn = self.conn.clone();
-        let _: () = conn.hdel("servers_hash", container_id).await?;
-
-        Ok(())
     }
 }
