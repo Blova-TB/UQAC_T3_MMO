@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use shared::constants::STREAM_HEARTBEAT;
+use shared::models::Status;
 
 use crate::player::Player;
 use crate::config::ServerConfig;
@@ -28,13 +29,12 @@ impl Plugin for OrchestratorPlugin {
     }
 }
 
-// 🌟 Payload allégé : L'orchestrateur n'a besoin que de savoir "Qui es-tu ?" et "Combien de joueurs as-tu ?"
 #[derive(Serialize)]
 pub struct HeartbeatPayload {
     pub id: String,
     pub player_count: usize,
     pub max_players: usize,
-    pub status: &'static str,
+    pub status: Status
 }
 
 #[derive(Resource)]
@@ -103,9 +103,9 @@ fn send_heartbeat(
     mut timer: ResMut<HeartbeatTimer>,
     config: Res<ServerConfig>,
     player_query: Query<Entity, With<Player>>,
-    mut orch_client_opt: Option<ResMut<OrchestratorClient>>,
+    orch_client_opt: Option<ResMut<OrchestratorClient>>,
 ) {
-    let Some(mut orch_client) = orch_client_opt else { return };
+    let Some(orch_client) = orch_client_opt else { return };
 
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -114,7 +114,7 @@ fn send_heartbeat(
     let conn = orch_client.connection.as_ref().unwrap();
 
     let count = player_query.iter().count();
-    let status = if count >= config.max_players { "FULL" } else { "ONLINE" };
+    let status = if count >= config.max_players { Status::Full } else { Status::Online };
 
     let payload = HeartbeatPayload {
         id: config.id.clone(),

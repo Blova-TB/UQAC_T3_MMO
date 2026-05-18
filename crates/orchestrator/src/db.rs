@@ -1,19 +1,15 @@
 ﻿use redis::aio::MultiplexedConnection;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Status {
-    Starting,
-    Connected,
-}
+use shared::models::Status;
+use anyhow::{Context, Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerInfo {
     pub container_id: String,
     pub address: String,
-    pub players_online: u32,
-    pub max_players: u32,
+    pub players_online: usize,
+    pub max_players: usize,
     pub status: Status,
 }
 
@@ -23,48 +19,30 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new(redis_url: &str) -> Result<Self, redis::RedisError> {
-        let client = redis::Client::open(redis_url)?;
-        let conn = client.get_multiplexed_async_connection().await?;
+    pub async fn new(redis_url: &str) -> Result<Self> {
+        let client = redis::Client::open(redis_url)
+            .context("L'URL Redis est mal formatée")?;
+        let conn = client.get_multiplexed_async_connection().await
+            .context("Impossible d'établir la connexion TCP avec Redis")?;
         Ok(Self { conn })
     }
 
-    /// Utilise HSET pour ranger le serveur dans un "dossier" global
-    pub async fn save_server(
-        &self,
-        server: &ServerInfo,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn save_server(&self, server: &ServerInfo) -> Result<()> {
         let mut conn = self.conn.clone();
-
-        // Sécurisation de la sérialisation
         let json = serde_json::to_string(server)?;
-
-        // 🌟 CORRECTION ICI : On assigne le résultat à `_` en forçant le type `()`.
-        // Cela dit au compilateur : "Exécute la requête, propage l'erreur si besoin avec `?`,
-        // mais je me fiche de la valeur de retour (true/false), traite-la comme vide".
         let _: () = conn.hset("servers_hash", &server.container_id, json).await?;
-
         Ok(())
     }
 
-    /// L'algorithme de Matchmaking (Recherche du meilleur serveur)
-    pub async fn get_available_server(&self) -> Result<Option<ServerInfo>, redis::RedisError> {
+    pub async fn get_all_servers(&self) -> Result<Vec<ServerInfo>> {
         let mut conn = self.conn.clone();
-
-        // HVALS récupère toutes les valeurs (les JSON) du Hash d'un coup
         let servers_json: Vec<String> = conn.hvals("servers_hash").await?;
 
-        // Utilisation de l'approche fonctionnelle Rust pour trouver le meilleur candidat
-        let best_server = servers_json
+        let servers = servers_json
             .into_iter()
-            // 1. Désérialise les JSON valides, ignore les erreurs
             .filter_map(|json| serde_json::from_str::<ServerInfo>(&json).ok())
-            // 2. Ne garde que les serveurs qui ont de la place
-            .filter(|server| server.players_online < server.max_players)
-            // 3. (Optionnel mais recommandé) On prend le serveur le plus rempli
-            // pour regrouper les joueurs et éviter d'avoir 10 serveurs avec 1 joueur.
-            .max_by_key(|server| server.players_online);
+            .collect();
 
-        Ok(best_server)
+        Ok(servers)
     }
 }

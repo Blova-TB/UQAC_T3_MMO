@@ -3,6 +3,7 @@ use bollard::query_parameters::{CreateContainerOptionsBuilder, StartContainerOpt
 use bollard::Docker;
 use std::collections::HashMap;
 use uuid::Uuid;
+use anyhow::{Context, Result};
 
 pub struct DockerOrchestrator {
     docker: Docker,
@@ -10,8 +11,10 @@ pub struct DockerOrchestrator {
 }
 
 impl DockerOrchestrator {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let docker = Docker::connect_with_socket_defaults()?;
+    pub async fn new() -> Result<Self> {
+        let docker = Docker::connect_with_socket_defaults()
+            .context("Impossible de se connecter au démon Docker. Est-il lancé ?")?;
+
         let my_id = std::fs::read_to_string("/etc/hostname")
             .unwrap_or_else(|_| "orchestrator".to_string())
             .trim()
@@ -45,13 +48,13 @@ impl DockerOrchestrator {
 
         Ok(Self { docker, orchestrator_ip })
     }
-
+    
     pub async fn spawn_game_server(
         &self,
         container_name: &str,
         image_name: &str,
         external_port: &str,
-    ) -> Result<(String, String), Box<dyn std::error::Error>> {
+    ) -> Result<(String, String)> {
 
         let server_id = Uuid::new_v4().to_string();
 
@@ -83,15 +86,12 @@ impl DockerOrchestrator {
         let options = CreateContainerOptionsBuilder::default()
             .name(container_name)
             .build();
+        
+        let response = self.docker.create_container(Some(options), config).await
+            .context(format!("Échec de la création du conteneur {}", container_name))?;
 
-        let response = self
-            .docker
-            .create_container(Some(options), config)
-            .await?;
-
-        self.docker
-            .start_container(&response.id, None::<StartContainerOptions>)
-            .await?;
+        self.docker.start_container(&response.id, None::<StartContainerOptions>).await
+            .context(format!("Échec du démarrage du conteneur {}", container_name))?;
 
         Ok((response.id, server_id))
     }
