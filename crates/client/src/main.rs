@@ -7,8 +7,6 @@ use std::time::Duration;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer};
 use shared::network::protocols::QuicBackend;
 
-// --- Protocoles (Stricte copie de ceux du serveur) ---
-
 #[derive(Encode, Decode, Debug)]
 pub enum ClientPacket {
     Join { username: String },
@@ -31,8 +29,6 @@ pub struct PlayerPositionData {
     pub entity_bits: u64,
     pub position: [f32; 2],
 }
-
-// --- État du client ---
 
 #[derive(Resource)]
 pub struct ClientState {
@@ -57,8 +53,7 @@ fn setup_client(mut commands: Commands) {
     let backend = QuicBackend::new();
     let peer = GamePeer::new(backend);
 
-    // Connexion au Serveur Dédié (Assurez-vous que le port correspond)
-    peer.connect("127.0.0.1", 5000).expect("Échec de l'initialisation de la connexion");
+    peer.connect("127.0.0.1", 4001).expect("Échec de l'initialisation de la connexion");
 
     commands.insert_resource(ClientState {
         peer,
@@ -66,7 +61,7 @@ fn setup_client(mut commands: Commands) {
         joined: false,
     });
 
-    println!("Client : Tentative de connexion au serveur 127.0.0.1:5000...");
+    println!("Client : Tentative de connexion au serveur 127.0.0.1:4001...");
 }
 
 fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExit>) {
@@ -79,7 +74,7 @@ fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExi
             GameNetworkEvent::StreamCreated(conn, stream) => {
                 if !state.joined && stream.is_reliable() {
                     println!("Client : Flux Fiable reçu. Envoi de la requête de connexion (Join)...");
-                    state.joined = true; // Verrouillage pour empêcher la boucle
+                    state.joined = true;
 
                     let packet = ClientPacket::Join {
                         username: "TestPlayer_01".to_string(),
@@ -94,7 +89,6 @@ fn handle_network(mut state: ResMut<ClientState>, mut exit: MessageWriter<AppExi
                 }
             }
             GameNetworkEvent::Message { data, .. } => {
-                // Décodage de la réponse du serveur
                 if let Ok(packet) = bitcode::decode::<ServerPacket>(&data) {
                     match packet {
                         ServerPacket::Welcome { player_id } => {

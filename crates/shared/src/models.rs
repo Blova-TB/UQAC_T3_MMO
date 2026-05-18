@@ -6,4 +6,5 @@ pub enum Status {
     Starting,
     Online,
     Full,
+    Closed,
 }

@@ -12,6 +12,8 @@ use shared::models::Status;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 use tokio::signal;
 
 #[derive(Deserialize)]
@@ -19,7 +21,7 @@ pub struct HeartbeatPayload {
     pub id: String,
     pub player_count: usize,
     pub max_players: usize,
-    pub status: String,
+    pub status: Status,
 }
 
 #[tokio::main]
@@ -39,9 +41,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let docker_manager = Arc::new(DockerOrchestrator::new().await?);
 
-    let next_port = Arc::new(AtomicU16::new(4001));
-
     let mut autoscale_timer = tokio::time::interval(Duration::from_secs(10));
+
+    let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
 
     println!("🛡️ L'orchestrateur (Auto-Scaling: {}) est en ligne. (CTRL+C pour quitter)", min_available_servers);
 
@@ -66,29 +68,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("⚖️ [Auto-Scaler] {}/{} serveurs dispos. Démarrage de {} instance(s)...",
                             available_count, min_available_servers, to_spawn);
 
-                        for _ in 0..to_spawn {
-                            let port = next_port.fetch_add(1, Ordering::SeqCst);
-                            let container_name = format!("game-shard-{}", port);
-
-                            let docker_clone = docker_manager.clone();
-                            let db_clone = database.clone();
-
-                            tokio::spawn(async move {
-                                match docker_clone.spawn_game_server(&container_name, "uqac_t3_mmo-server:local", &port.to_string()).await {
-                                    Ok((_, server_id)) => {
-                                        let server_info = ServerInfo {
-                                            container_id: server_id,
-                                            address: format!("127.0.0.1:{}", port),
-                                            players_online: 0,
-                                            max_players: 100,
-                                            status: Status::Starting,
-                                        };
-                                        let _ = db_clone.save_server(&server_info).await;
-                                        println!("🚀 Instance '{}' lancée sur le port {}", container_name, port);
-                                    },
-                                    Err(e) => eprintln!("❌ Échec lancement {} : {}", container_name, e),
+                        let mut used_ports = HashSet::new();
+                        for server in &servers {
+                            if let Some(port_str) = server.address.split(':').last() {
+                                if let Ok(p) = port_str.parse::<u16>() {
+                                    used_ports.insert(p);
                                 }
-                            });
+                            }
+                        }
+                        for _ in 0..to_spawn {
+                            let mut selected_port = None;
+                            for port in 4001..=5000 {
+                                if !used_ports.contains(&port) {
+                                    selected_port = Some(port);
+                                    used_ports.insert(port);
+                                    break;
+                                }
+                            }
+
+                            if let Some(port) = selected_port {
+                                let container_name = format!("game-shard-{}", port);
+
+                                let docker_clone = docker_manager.clone();
+                                let db_clone = database.clone();
+
+                                tokio::spawn(async move {
+                                    match docker_clone.spawn_game_server(&container_name, "uqac_t3_mmo-server:local", &port.to_string()).await {
+                                        Ok((_, server_id)) => {
+                                            let server_info = ServerInfo {
+                                                container_id: server_id,
+                                                address: format!("127.0.0.1:{}", port),
+                                                players_online: 0,
+                                                max_players: 100,
+                                                status: Status::Starting,
+                                            };
+                                            let _ = db_clone.save_server(&server_info).await;
+                                            println!("🚀 Instance '{}' lancée avec succès sur le port recyclé {}", container_name, port);
+                                        },
+                                        Err(e) => eprintln!("❌ Échec lancement {} : {}", container_name, e),
+                                    }
+                                });
+                            } else {
+                                eprintln!("🚨 [CRITIQUE] Aucun port UDP libre trouvé dans la plage 4001-5000 !");
+                                break;
+                            }
                         }
                     }
                 }
@@ -98,31 +121,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 while let Ok(Some(event)) = orchestrator_peer.poll() {
                     match event {
                         GameNetworkEvent::Message { connection, stream, data } => {
-                            if (stream.stream_id >> 2) == STREAM_HEARTBEAT {
-                                if let Ok(json_str) = String::from_utf8(data.to_vec()) {
+                            let raw_stream_id = stream.stream_id >> 2;
 
-                                    if let Ok(payload) = serde_json::from_str::<HeartbeatPayload>(&json_str) {
-                                        let server_status = if payload.status == "FULL" { Status::Full } else { Status::Online };
+                            match raw_stream_id {
+                                STREAM_HEARTBEAT => {
+                                    if let Ok(json_str) = String::from_utf8(data.to_vec()) {
+                                        if let Ok(payload) = serde_json::from_str::<HeartbeatPayload>(&json_str) {
 
-                                        if let Ok(servers) = database.get_all_servers().await {
-                                            if let Some(existing) = servers.iter().find(|s| s.container_id == payload.id) {
-                                                let updated_info = ServerInfo {
-                                                    container_id: payload.id.clone(),
-                                                    address: existing.address.clone(),
-                                                    players_online: payload.player_count,
-                                                    max_players: payload.max_players,
-                                                    status: server_status,
-                                                };
-                                                let _ = database.save_server(&updated_info).await;
+                                            active_sessions.insert(connection.connection_id, payload.id.clone());
+
+                                            if let Ok(servers) = database.get_all_servers().await {
+                                                if let Some(existing) = servers.iter().find(|s| s.container_id == payload.id) {
+                                                    let updated_info = ServerInfo {
+                                                        container_id: payload.id.clone(),
+                                                        address: existing.address.clone(),
+                                                        players_online: payload.player_count,
+                                                        max_players: payload.max_players,
+                                                        status: payload.status,
+                                                    };
+                                                    let _ = database.save_server(&updated_info).await;
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                _ => {}
                             }
                         }
                         GameNetworkEvent::Disconnected(conn) => {
-                            println!("💔 Serveur déconnecté : {:?}", conn.connection_id);
-                            // TODO (Optionnel) : Ajouter une logique pour retirer le serveur de Redis s'il se déconnecte définitivement
+                            println!("💔 Déconnexion QUIC détectée pour la connexion {:?}", conn.connection_id);
+
+                            if let Some(server_id) = active_sessions.remove(&conn.connection_id) {
+                                let db_clone = database.clone();
+                                let docker_clone = docker_manager.clone();
+
+                                tokio::spawn(async move {
+                                    if let Ok(servers) = db_clone.get_all_servers().await {
+                                        if let Some(server) = servers.iter().find(|s| s.container_id == server_id) {
+                                            if let Some(port_str) = server.address.split(':').last() {
+                                                let container_name = format!("game-shard-{}", port_str);
+                                                let _ = docker_clone.remove_game_server(&container_name).await;
+                                            }
+                                        }
+                                    }
+                                    let _ = db_clone.remove_server(&server_id).await;
+                                    println!("🧹 Nettoyage complet (Redis + Docker) terminé pour le serveur {}", server_id);
+                                });
+                            }
                         }
                         _ => {}
                     }
@@ -130,6 +175,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-
     Ok(())
 }

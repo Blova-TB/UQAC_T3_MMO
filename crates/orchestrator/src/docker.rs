@@ -1,5 +1,5 @@
 ﻿use bollard::models::{ContainerCreateBody, HostConfig, PortBinding};
-use bollard::query_parameters::{CreateContainerOptionsBuilder, StartContainerOptions};
+use bollard::query_parameters::{CreateContainerOptionsBuilder, StartContainerOptions, RemoveContainerOptions};
 use bollard::Docker;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -48,7 +48,7 @@ impl DockerOrchestrator {
 
         Ok(Self { docker, orchestrator_ip })
     }
-    
+
     pub async fn spawn_game_server(
         &self,
         container_name: &str,
@@ -86,7 +86,7 @@ impl DockerOrchestrator {
         let options = CreateContainerOptionsBuilder::default()
             .name(container_name)
             .build();
-        
+
         let response = self.docker.create_container(Some(options), config).await
             .context(format!("Échec de la création du conteneur {}", container_name))?;
 
@@ -94,5 +94,23 @@ impl DockerOrchestrator {
             .context(format!("Échec du démarrage du conteneur {}", container_name))?;
 
         Ok((response.id, server_id))
+    }
+    pub async fn remove_game_server(&self, container_name: &str) -> Result<()> {
+        let options = Some(RemoveContainerOptions {
+            force: true,
+            v: true,
+            ..Default::default()
+        });
+
+        match self.docker.remove_container(container_name, options).await {
+            Ok(_) => {
+                println!("🐳 [Docker] Conteneur '{}' détruit avec succès.", container_name);
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("⚠️ [Docker] Impossible de détruire le conteneur '{}' : {}", container_name, e);
+                Err(e.into())
+            }
+        }
     }
 }

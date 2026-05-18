@@ -45,4 +45,11 @@ impl Database {
 
         Ok(servers)
     }
+
+    pub async fn remove_server(&self, container_id: &str) -> anyhow::Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn.hdel("servers_hash", container_id).await?;
+
+        Ok(())
+    }
 }
