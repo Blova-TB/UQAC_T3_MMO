@@ -9,12 +9,12 @@ use shared::network::protocols::QuicBackend;
 use shared::network::{GameNetworkEvent, GamePeer};
 use shared::constants::STREAM_HEARTBEAT;
 use shared::models::Status;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use tokio::signal;
+use futures::StreamExt;
 
 #[derive(Deserialize)]
 pub struct HeartbeatPayload {
@@ -46,6 +46,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
 
     println!("🛡️ L'orchestrateur (Auto-Scaling: {}) est en ligne. (CTRL+C pour quitter)", min_available_servers);
+
+    let mut conn = database.conn.clone();
+    let _: () = redis::cmd("CONFIG").arg("SET").arg("notify-keyspace-events").arg("Ex").query_async(&mut conn).await?;
+
+    let mut pubsub = database.client.get_async_pubsub().await?;
+
+    pubsub.psubscribe("__keyevent@0__:expired").await?;
+    let db_clone = database.clone();
+    let docker_clone = docker_manager.clone();
+
+    tokio::spawn(async move {
+        let mut stream = pubsub.on_message();
+        while let Some(msg) = stream.next().await {
+            if let Ok(expired_key) = msg.get_payload::<String>() {
+                if expired_key.starts_with("heartbeat:") {
+                    let parts: Vec<&str> = expired_key.split(':').collect();
+                    if parts.len() == 3 {
+                        let server_id = parts[1];
+                        let port = parts[2];
+                        println!("⏰ [TTL Redis] Le serveur {} (Port {}) n'a pas donné de nouvelles depuis 15s. Extermination...", server_id, port);
+                        let container_name = format!("game-shard-{}", port);
+                        let _ = docker_clone.remove_game_server(&container_name).await;
+                        let _ = db_clone.remove_server(server_id, port).await;
+                    }
+                }
+            }
+        }
+    });
 
     loop {
         tokio::select! {
@@ -161,10 +189,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Some(port_str) = server.address.split(':').last() {
                                                 let container_name = format!("game-shard-{}", port_str);
                                                 let _ = docker_clone.remove_game_server(&container_name).await;
+                                                let _ = db_clone.remove_server(&server_id, port_str).await;
                                             }
                                         }
                                     }
-                                    let _ = db_clone.remove_server(&server_id).await;
                                     println!("🧹 Nettoyage complet (Redis + Docker) terminé pour le serveur {}", server_id);
                                 });
                             }
