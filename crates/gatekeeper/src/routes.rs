@@ -1,10 +1,15 @@
 use bcrypt::{DEFAULT_COST, hash, verify};
-use rocket::http::Status;
 use rocket::State;
+use rocket::http::Status;
 use rocket::serde::json::Json;
+use shared::models::Status as ServerStatus;
 use sqlx::{Pool, Postgres, Row, types::Uuid};
 
-use crate::{jwt::create_jwt, models::{AuthRequest, AuthenticatedUser, BasicCredentials}};
+use crate::dbGatekeeper::Database;
+use crate::{
+    jwt::create_jwt,
+    models::{AuthRequest, AuthenticatedUser, BasicCredentials},
+};
 
 #[post("/register", data = "<user_data>")]
 pub async fn register(
@@ -49,16 +54,35 @@ pub async fn login(
         .map_err(|_| (Status::Unauthorized, "Erreur vérification".to_string()))?;
 
     if valid {
-        create_jwt(&user_id.to_string(), secret.as_str())
-            .map_err(|_| {
-                (
-                    Status::InternalServerError,
-                    "Erreur génération token".to_string(),
-                )
-            })
+        create_jwt(&user_id.to_string(), secret.as_str()).map_err(|_| {
+            (
+                Status::InternalServerError,
+                "Erreur génération token".to_string(),
+            )
+        })
     } else {
         Err((Status::Unauthorized, "Identifiants invalides".to_string()))
     }
+}
+
+#[get("/server")]
+pub async fn get_server(
+    _user: AuthenticatedUser,
+    db: &State<Database>
+) -> Result<String, Status> {
+    let servers = db.get_all_servers().await.map_err(|e| {
+        eprintln!("Database error (get_all_servers): {:?}", e);
+        Status::InternalServerError
+    })?;
+
+    servers
+        .into_iter()
+        .filter(|server| {
+            server.status == ServerStatus::Online && server.players_online < (server.max_players)
+        })
+        .max_by_key(|server| server.players_online)
+        .map(|server| server.address)
+        .ok_or(Status::NotFound)
 }
 
 #[get("/me")]
