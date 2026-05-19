@@ -1,12 +1,28 @@
 use bevy::app::ScheduleRunnerPlugin;
+use bevy::state::app::StatesPlugin;
 use bevy::prelude::*;
+use tokio::runtime::Runtime;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use bitcode::{Decode, Encode};
 use bytes::Bytes;
 use std::time::Duration;
+use bevy::tasks::IoTaskPool;
 
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer};
 use shared::network::protocols::QuicBackend;
+
+#[derive(Resource)]
+pub struct TokioRuntime(pub Runtime);
+
+impl Default for TokioRuntime {
+    fn default() -> Self {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Échec de l'initialisation du Runtime Tokio");
+        Self(rt)
+    }
+}
 
 #[derive(Encode, Decode, Debug)]
 pub enum ClientPacket {
@@ -62,6 +78,8 @@ fn main() {
         .add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
             Duration::from_secs_f64(1.0 / 60.0),
         )))
+        .add_plugins(StatesPlugin)
+        .init_resource::<TokioRuntime>()
         .init_state::<AppState>()
 
         // Phase 1 : Login Gatekeeper
@@ -84,23 +102,26 @@ fn main() {
 
 // --- Systèmes : Phase 1 (Gatekeeper Login) ---
 
-fn spawn_login_request(mut commands: Commands) {
+fn spawn_login_request(mut commands: Commands, rt: Res<TokioRuntime>) {
     println!("Client : Authentification auprès du Gatekeeper (POST /login)...");
-    let thread_pool = AsyncComputeTaskPool::get();
 
-    // Identifiants de test à adapter selon votre base de données PostgreSQL
     let username = "test_user".to_string();
     let password = "password123".to_string();
 
-    let task = thread_pool.spawn(async move {
+    let join_handle = rt.0.spawn(async move {
         let client = reqwest::Client::new();
         let res = client
-            .post("http://127.0.0.1:8000/login")
-            .basic_auth(username, Some(password)) // Injection dans l'en-tête pour BasicCredentials
+            .post("http://gatekeeper:3000/login")
+            .basic_auth(username, Some(password))
             .send()
             .await?;
 
         res.text().await
+    });
+
+    let thread_pool = IoTaskPool::get();
+    let task = thread_pool.spawn(async move {
+        join_handle.await.expect("Le thread Tokio a crashé lors du login")
     });
 
     commands.spawn(LoginTask(task));
@@ -135,20 +156,29 @@ fn poll_login_request(
 
 // --- Systèmes : Phase 2 (Gatekeeper Fetch Server) ---
 
-fn spawn_gatekeeper_request(mut commands: Commands, token: Res<GatekeeperToken>) {
+fn spawn_gatekeeper_request(
+    mut commands: Commands,
+    token: Res<GatekeeperToken>,
+    rt: Res<TokioRuntime>
+) {
     println!("Client : Requête d'un serveur de jeu (GET /server avec JWT)...");
-    let thread_pool = AsyncComputeTaskPool::get();
+
     let jwt_token = token.0.clone();
 
-    let task = thread_pool.spawn(async move {
+    let join_handle = rt.0.spawn(async move {
         let client = reqwest::Client::new();
         let res = client
-            .get("http://127.0.0.1:8000/server")
-            .bearer_auth(jwt_token) // Sécurisation obligatoire suite au Request Guard AuthenticatedUser
+            .get("http://gatekeeper:3000/server")
+            .bearer_auth(jwt_token)
             .send()
             .await?;
 
         res.text().await
+    });
+
+    let thread_pool = IoTaskPool::get();
+    let task = thread_pool.spawn(async move {
+        join_handle.await.expect("Le thread Tokio a crashé lors du fetch serveur")
     });
 
     commands.spawn(FetchServerTask(task));
@@ -241,8 +271,9 @@ fn handle_connection_handshake(
                                 next_state.set(AppState::InGame);
                             }
                             ServerPacket::RejectedFull => {
-                                println!("Client : Connexion refusée (Serveur plein).");
-                                exit.write(AppExit::Success);
+                                println!("Client : ❌ Serveur plein. Redemande d'une affectation au Gatekeeper...");
+                                next_state.set(AppState::GatekeeperFetch);
+                                return;
                             }
                             _ => {}
                         }
@@ -280,6 +311,7 @@ fn handle_ingame_network(
                         match packet {
                             ServerPacket::SyncPositions(players) => {
                                 println!("--- State Sync Snapshot [{} Joueur(s) Connecté(s)] ---", players.len());
+                                /*
                                 for player in players {
                                     println!(
                                         " > Entity ID: {:<10} | Position Translatée: [X: {:>6.2}, Y: {:>6.2}]",
@@ -287,7 +319,7 @@ fn handle_ingame_network(
                                         player.position[0],
                                         player.position[1]
                                     );
-                                }
+                                }*/
                             }
                             _ => {}
                         }

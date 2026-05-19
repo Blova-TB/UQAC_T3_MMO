@@ -7,7 +7,7 @@ mod models;
 mod routes;
 mod dbGatekeeper;
 
-use dbGatekeeper::{Database, ServerInfo};
+use dbGatekeeper::{Database};
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
 use crate::routes::{get_me, login, register, get_server};

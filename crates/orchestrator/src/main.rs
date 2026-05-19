@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let docker_manager = Arc::new(DockerOrchestrator::new().await?);
 
-    let mut autoscale_timer = tokio::time::interval(Duration::from_secs(10));
+    let mut autoscale_timer = tokio::time::interval(Duration::from_secs(1));
 
     let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
 
@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         Ok((_, server_id)) => {
                                             let server_info = ServerInfo {
                                                 container_id: server_id,
-                                                address: format!("127.0.0.1:{}", port),
+                                                address: format!("10.0.0.203:{}", port),
                                                 players_online: 0,
                                                 max_players: 100,
                                                 status: Status::Starting,
