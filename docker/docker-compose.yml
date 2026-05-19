@@ -86,6 +86,7 @@ services:
       - ROCKET_ADDRESS=${ROCKET_ADDRESS}
       - ROCKET_PORT=${ROCKET_PORT}
       - JWT_SECRET=${JWT_SECRET}
+      - REDIS_URL=${REDIS_URL}
     networks:
       - game-network
 

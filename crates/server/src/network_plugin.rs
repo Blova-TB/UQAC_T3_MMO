@@ -82,17 +82,21 @@ pub enum ServerPacket {
 
 /// Initialise l'écouteur QUIC pour accepter les connexions des joueurs
 fn bind_server_socket(mut commands: Commands, config: Res<ServerConfig>) {
+    let port: u16 = std::env::var("GAME_PORT")
+        .unwrap_or_else(|_| "4000".to_string())
+        .parse()
+        .expect("GAME_PORT doit être un nombre");
     let server_backend = QuicBackend::new();
     let server_peer = GamePeer::new(server_backend);
 
-    server_peer.listen("0.0.0.0", 4000).unwrap_or_else(|e| {
-        panic!("Échec du bind du Game Socket sur le port 4000: {:?}", e);
+    server_peer.listen("0.0.0.0", port).unwrap_or_else(|e| {
+        panic!("Échec du bind du Game Socket sur le port {}: {:?}", port, e);
     });
 
     commands.insert_resource(NetworkState { peer: server_peer });
 
     println!(
-        "🎮 Serveur Joueurs en ligne. Écoute UDP(QUIC) sur 0.0.0.0:4000.",
+        "🎮 Serveur Joueurs en ligne. Écoute UDP(QUIC) sur 0.0.0.0:{}.",port,
     );
 }
 
@@ -128,6 +132,7 @@ fn receive_packets(
 
                                 if registry.players.len() >= config.max_players {
                                     let reject = bitcode::encode(&ServerPacket::RejectedFull);
+                                    println!("⚠️ Le client {:?} a été rejeté, server full.", connection.connection_id);
                                     let _ = network.peer.send(&connection, &stream, Bytes::from(reject));
                                     continue;
                                 }

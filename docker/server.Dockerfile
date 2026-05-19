@@ -1,40 +1,40 @@
-﻿# --- Stage 1: Builder ---
-FROM rust:latest AS builder
+﻿# --- Stage 1: Planner (Le Chef) ---
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y pkg-config libudev-dev && rm -rf /var/lib/apt/lists/*
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-COPY Cargo.toml Cargo.lock ./
-COPY crates/shared/Cargo.toml crates/shared/
-COPY crates/gatekeeper/Cargo.toml crates/gatekeeper/
-COPY crates/server/Cargo.toml crates/server/
-COPY crates/client/Cargo.toml crates/client/
-COPY crates/orchestrator/Cargo.toml crates/orchestrator/
+# --- Stage 2: Builder (Le Cuisinier) ---
+FROM chef AS builder
+WORKDIR /app
 
-# 2. Créer des fichiers factices pour TOUT le workspace
-RUN mkdir -p crates/shared/src crates/gatekeeper/src crates/server/src crates/client/src crates/orchestrator/src && \
-    touch crates/shared/src/lib.rs && \
-    echo "fn main() {}" > crates/gatekeeper/src/main.rs && \
-    echo "fn main() {}" > crates/server/src/main.rs && \
-    echo "fn main() {}" > crates/client/src/main.rs && \
-    echo "fn main() {}" > crates/orchestrator/src/main.rs && \
-    cargo build --release -p gatekeeper
+# IMPORTANT : Le serveur a besoin de ces paquets système pour compiler
+RUN apt-get update && \
+    apt-get install -y pkg-config libudev-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-# On copie uniquement le serveur et le code partagé
-COPY crates/shared ./crates/shared
-COPY crates/server ./crates/server
+COPY --from=planner /app/recipe.json recipe.json
+# On ne compile QUE l'arbre de dépendances du serveur
+RUN cargo chef cook --release --recipe-path recipe.json -p server
 
-RUN touch crates/server/src/main.rs && \
-    cargo build --release -p server
+COPY . .
+RUN cargo build --release -p server
 
-# --- Stage 2: Runtime ---
+# --- Stage 3: Runtime ---
 FROM debian:bookworm-slim
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# À l'exécution, le serveur n'a besoin que des certificats de base
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/server /usr/local/bin/server
 
+# Le serveur utilise de l'UDP (souvent le cas pour les MMO / jeux temps réel)
 EXPOSE 4000/udp
 
 CMD ["server"]

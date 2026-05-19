@@ -58,9 +58,12 @@ impl DockerOrchestrator {
 
         let server_id = Uuid::new_v4().to_string();
 
+        // 1. On mappe le port dynamique vers LUI-MÊME
+        let internal_port_str = format!("{}/udp", external_port);
+        
         let mut port_bindings = HashMap::new();
         port_bindings.insert(
-            "4000/udp".to_string(),
+            internal_port_str.clone(),
             Some(vec![PortBinding {
                 host_ip: Some("0.0.0.0".to_string()),
                 host_port: Some(external_port.to_string()),
@@ -72,6 +75,7 @@ impl DockerOrchestrator {
             env: Some(vec![
                 format!("ORCHESTRATOR_ADDR={}:4000", self.orchestrator_ip),
                 format!("SERVER_ID={}", server_id),
+                format!("GAME_PORT={}", external_port), // <--- NOUVEAU
             ]),
             host_config: Some(HostConfig {
                 port_bindings: Some(port_bindings),

@@ -1,40 +1,34 @@
-﻿# --- Stage 1: Builder ---
-FROM rust:latest AS builder
+﻿# --- Stage 1: Planner (Le Chef) ---
+# Ce stage analyse le workspace et prépare la "recette" des dépendances
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
 
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# --- Stage 2: Builder ---
+FROM chef AS builder
+WORKDIR /app
+
+COPY --from=planner /app/recipe.json recipe.json
+
+# On ajoute "-p gatekeeper" pour ne compiler QUE les dépendances de ce crate,
+# ignorant ainsi les dépendances graphiques (Wayland) du crate "client".
+RUN cargo chef cook --release --recipe-path recipe.json -p gatekeeper
+
+COPY . .
+
 ENV SQLX_OFFLINE=true
+RUN cargo build --release -p gatekeeper
 
-COPY Cargo.toml Cargo.lock ./
-COPY crates/shared/Cargo.toml crates/shared/
-COPY crates/gatekeeper/Cargo.toml crates/gatekeeper/
-COPY crates/server/Cargo.toml crates/server/
-COPY crates/client/Cargo.toml crates/client/
-COPY crates/orchestrator/Cargo.toml crates/orchestrator/
-
-# 2. Créer des fichiers factices pour TOUT le workspace
-RUN mkdir -p crates/shared/src crates/gatekeeper/src crates/server/src crates/client/src crates/orchestrator/src && \
-    touch crates/shared/src/lib.rs && \
-    echo "fn main() {}" > crates/gatekeeper/src/main.rs && \
-    echo "fn main() {}" > crates/server/src/main.rs && \
-    echo "fn main() {}" > crates/client/src/main.rs && \
-    echo "fn main() {}" > crates/orchestrator/src/main.rs && \
-    cargo build --release -p gatekeeper
-
-
-# 3. On copie uniquement le vrai code dont on a besoin
-COPY crates/gatekeeper ./crates/gatekeeper
-
-# 4. Invalider le cache du fichier principal et compiler le binaire final
-RUN touch crates/gatekeeper/src/main.rs && \
-    cargo build --release -p gatekeeper
-
-# --- Stage 2: Runtime ---
+# --- Stage 3: Runtime (L'Exécution) ---
 FROM debian:bookworm-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Placer le binaire dans les exécutables système
 COPY --from=builder /app/target/release/gatekeeper /usr/local/bin/gatekeeper
 
 EXPOSE 3000
