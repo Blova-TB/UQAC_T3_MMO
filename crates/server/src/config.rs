@@ -18,7 +18,7 @@ impl ServerConfig {
             id: env::var("SERVER_ID")
                 .expect("❌ ERREUR: SERVER_ID manquante."),
 
-            max_players: env::var("MAX_PLAYERS")
+            max_players: env::var("SERVER_MAX_PLAYERS")
                 .unwrap_or_else(|_| "100".to_string())
                 .parse::<usize>()
                 .expect("❌ ERREUR: MAX_PLAYERS doit être un entier."),

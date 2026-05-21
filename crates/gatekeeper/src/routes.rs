@@ -78,7 +78,7 @@ pub async fn get_server(
     servers
         .into_iter()
         .filter(|server| {
-            server.status == ServerStatus::Online && server.players_online < (server.max_players)
+            (server.status == ServerStatus::Online || server.status == ServerStatus::Empty) && server.players_online < (server.max_players)
         })
         .max_by_key(|server| server.players_online)
         .map(|server| server.address)

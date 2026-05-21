@@ -114,7 +114,7 @@ fn send_heartbeat(
     let conn = orch_client.connection.as_ref().unwrap();
 
     let count = player_query.iter().count();
-    let status = if count >= config.max_players { Status::Full } else { Status::Online };
+    let status = if count >= config.max_players { Status::Full } else if count == 0 { Status::Empty } else { Status::Online };
 
     let payload = HeartbeatPayload {
         id: config.id.clone(),

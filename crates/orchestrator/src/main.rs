@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-use tokio::signal;
 use futures::StreamExt;
 
 #[derive(Deserialize)]
@@ -24,8 +23,30 @@ pub struct HeartbeatPayload {
     pub status: Status,
 }
 
+pub struct ServerConfig {
+    pub image_name: String,
+    pub max_players: usize,
+    pub server_url: String,
+}
+
+impl ServerConfig {
+    pub fn from_env() -> Self {
+        Self {
+            image_name: std::env::var("IMAGE_NAME")
+                .unwrap_or_else(|_| "uqac_t3_mmo-server:local".to_string()),
+            max_players: std::env::var("SERVER_MAX_PLAYERS")
+                .unwrap_or_else(|_| "75".to_string())
+                .parse()
+                .expect("⚠️ SERVER_MAX_PLAYER doit être un nombre entier valide"),
+            server_url: std::env::var("SERVER_URL")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app_config = Arc::new(ServerConfig::from_env());
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
     let min_available_servers: usize = std::env::var("MIN_AVAILABLE_SERVERS")
         .unwrap_or_else(|_| "2".to_string())
@@ -77,9 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
-            _ = signal::ctrl_c() => {
-                println!("\n🛑 Signal d'arrêt reçu, fermeture...");
-                let _ = orchestrator_peer.shutdown();
+            _ = wait_for_shutdown() => {
+                println!("Début du shutdown...");
                 break;
             }
 
@@ -87,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(servers) = database.get_all_servers().await {
 
                     let available_count = servers.iter().filter(|s| {
-                        (s.status == Status::Starting || s.status == Status::Online)
+                        (s.status == Status::Starting || s.status == Status::Empty)
                         && s.players_online < s.max_players
                     }).count();
 
@@ -120,16 +140,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let docker_clone = docker_manager.clone();
                                 let db_clone = database.clone();
 
+                                let config_clone = app_config.clone();
+
                                 tokio::spawn(async move {
-                                    match docker_clone.spawn_game_server(&container_name, "uqac_t3_mmo-server:local", &port.to_string()).await {
+                                    match docker_clone.spawn_game_server(&container_name, &config_clone.image_name, &port.to_string(), config_clone.max_players).await {
                                         Ok((_, server_id)) => {
                                             let server_info = ServerInfo {
                                                 container_id: server_id,
-                                                address: format!("10.0.0.203:{}", port),
+                                                address: format!("{}:{}", config_clone.server_url, port),
                                                 players_online: 0,
-                                                max_players: 100,
+                                                max_players: config_clone.max_players,
                                                 status: Status::Starting,
                                             };
+
                                             let _ = db_clone.save_server(&server_info).await;
                                             println!("🚀 Instance '{}' lancée avec succès sur le port recyclé {}", container_name, port);
                                         },
@@ -139,6 +162,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 eprintln!("🚨 [CRITIQUE] Aucun port UDP libre trouvé dans la plage 4001-5000 !");
                                 break;
+                            }
+                        }
+                    }
+                    else if available_count > min_available_servers {
+                        let to_kill = available_count - min_available_servers;
+
+                        let empty_servers: Vec<_> = servers
+                            .iter()
+                            .filter(|s| s.status == Status::Empty && s.players_online == 0)
+                            .collect();
+
+                        let kill_count = std::cmp::min(to_kill, empty_servers.len());
+
+                        if kill_count > 0 {
+                            println!("⚖️ [Auto-Scaler] {}/{} serveurs dispos. Arrêt de {} instance(s) excédentaire(s)...",
+                                available_count, min_available_servers, kill_count);
+
+                            for server in empty_servers.into_iter().take(kill_count) {
+                                if let Some(port_str) = server.address.split(':').last() {
+                                    let container_name = format!("game-shard-{}", port_str);
+
+                                    let docker_clone = docker_manager.clone();
+                                    let db_clone = database.clone();
+                                    let container_id = server.container_id.clone();
+                                    let port_string = port_str.to_string();
+
+                                    tokio::spawn(async move {
+                                        match docker_clone.remove_game_server(&container_name).await {
+                                            Ok(_) => {
+                                                let _ = db_clone.remove_server(&container_id, &port_string).await;
+                                                println!("🗑️ Instance excédentaire '{}' nettoyée avec succès.", container_name);
+                                            }
+                                            Err(e) => eprintln!("❌ Échec de l'arrêt de {} : {}", container_name, e),
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
@@ -203,5 +262,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    println!("🧹 [Shutdown] Nettoyage des instances de jeu en cours...");
+
+    if let Ok(servers) = database.get_all_servers().await {
+        for server in servers {
+            if let Some(port_str) = server.address.split(':').last() {
+                let container_name = format!("game-shard-{}", port_str);
+                println!("🔪 [Shutdown] Destruction de {}", container_name);
+
+                let _ = docker_manager.remove_game_server(&container_name).await;
+
+                let _ = database.remove_server(&server.container_id, port_str).await;
+            }
+        }
+    }
+
+    println!("💤 [Shutdown] Tous les serveurs de jeu ont été coupés. Extinction du réseau...");
+    let _ = orchestrator_peer.shutdown();
+    println!("👋 Bye !");
+
     Ok(())
+
+}
+
+async fn wait_for_shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("Impossible d'écouter SIGTERM");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Impossible d'écouter SIGINT");
+
+        tokio::select! {
+            _ = sigterm.recv() => { println!("\n🛑 SIGTERM (ex: Docker stop) reçu."); }
+            _ = sigint.recv() => { println!("\n🛑 SIGINT (CTRL+C) reçu."); }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_c, ctrl_break};
+        let mut ctrl_c_signal = ctrl_c().expect("Impossible d'écouter CTRL+C");
+        let mut ctrl_break_signal = ctrl_break().expect("Impossible d'écouter CTRL+BREAK");
+
+        tokio::select! {
+            _ = ctrl_c_signal.recv() => { println!("\n🛑 Signal CTRL+C (Windows) reçu."); }
+            _ = ctrl_break_signal.recv() => { println!("\n🛑 Signal CTRL+BREAK (Windows) reçu."); }
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        println!("\n🛑 Signal d'arrêt générique reçu.");
+    }
 }
