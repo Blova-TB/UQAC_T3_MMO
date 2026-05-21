@@ -4,6 +4,7 @@
 #[serde(rename_all = "UPPERCASE")]
 pub enum Status {
     Starting,
+    Empty,
     Online,
     Full,
     Closed,

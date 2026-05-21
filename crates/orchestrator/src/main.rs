@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(servers) = database.get_all_servers().await {
 
                     let available_count = servers.iter().filter(|s| {
-                        (s.status == Status::Starting || s.status == Status::Online)
+                        (s.status == Status::Starting || s.status == Status::Empty)
                         && s.players_online < s.max_players
                     }).count();
 
@@ -139,6 +139,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 eprintln!("🚨 [CRITIQUE] Aucun port UDP libre trouvé dans la plage 4001-5000 !");
                                 break;
+                            }
+                        }
+                    }
+                    else if available_count > min_available_servers {
+                        let to_kill = available_count - min_available_servers;
+
+                        let empty_servers: Vec<_> = servers
+                            .iter()
+                            .filter(|s| s.status == Status::Empty && s.players_online == 0)
+                            .collect();
+
+                        let kill_count = std::cmp::min(to_kill, empty_servers.len());
+
+                        if kill_count > 0 {
+                            println!("⚖️ [Auto-Scaler] {}/{} serveurs dispos. Arrêt de {} instance(s) excédentaire(s)...",
+                                available_count, min_available_servers, kill_count);
+
+                            for server in empty_servers.into_iter().take(kill_count) {
+                                if let Some(port_str) = server.address.split(':').last() {
+                                    let container_name = format!("game-shard-{}", port_str);
+
+                                    let docker_clone = docker_manager.clone();
+                                    let db_clone = database.clone();
+                                    let container_id = server.container_id.clone();
+                                    let port_string = port_str.to_string();
+
+                                    tokio::spawn(async move {
+                                        match docker_clone.remove_game_server(&container_name).await {
+                                            Ok(_) => {
+                                                let _ = db_clone.remove_server(&container_id, &port_string).await;
+                                                println!("🗑️ Instance excédentaire '{}' nettoyée avec succès.", container_name);
+                                            }
+                                            Err(e) => eprintln!("❌ Échec de l'arrêt de {} : {}", container_name, e),
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
