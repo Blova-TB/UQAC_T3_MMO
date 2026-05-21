@@ -54,6 +54,7 @@ impl DockerOrchestrator {
         container_name: &str,
         image_name: &str,
         external_port: &str,
+        max_players: usize,
     ) -> Result<(String, String)> {
 
         let server_id = Uuid::new_v4().to_string();
@@ -75,7 +76,8 @@ impl DockerOrchestrator {
             env: Some(vec![
                 format!("ORCHESTRATOR_ADDR={}:4000", self.orchestrator_ip),
                 format!("SERVER_ID={}", server_id),
-                format!("GAME_PORT={}", external_port), // <--- NOUVEAU
+                format!("GAME_PORT={}", external_port),
+                format!("SERVER_MAX_PLAYERS={}", max_players),
             ]),
             host_config: Some(HostConfig {
                 port_bindings: Some(port_bindings),

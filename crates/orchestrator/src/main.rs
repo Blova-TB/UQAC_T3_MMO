@@ -24,8 +24,30 @@ pub struct HeartbeatPayload {
     pub status: Status,
 }
 
+pub struct ServerConfig {
+    pub image_name: String,
+    pub max_players: usize,
+    pub server_url: String,
+}
+
+impl ServerConfig {
+    pub fn from_env() -> Self {
+        Self {
+            image_name: std::env::var("IMAGE_NAME")
+                .unwrap_or_else(|_| "uqac_t3_mmo-server:local".to_string()),
+            max_players: std::env::var("SERVER_MAX_PLAYERS")
+                .unwrap_or_else(|_| "75".to_string())
+                .parse()
+                .expect("⚠️ SERVER_MAX_PLAYER doit être un nombre entier valide"),
+            server_url: std::env::var("SERVER_URL")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app_config = Arc::new(ServerConfig::from_env());
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
     let min_available_servers: usize = std::env::var("MIN_AVAILABLE_SERVERS")
         .unwrap_or_else(|_| "2".to_string())
@@ -120,16 +142,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let docker_clone = docker_manager.clone();
                                 let db_clone = database.clone();
 
+                                let config_clone = app_config.clone();
+
                                 tokio::spawn(async move {
-                                    match docker_clone.spawn_game_server(&container_name, "uqac_t3_mmo-server:local", &port.to_string()).await {
+                                    match docker_clone.spawn_game_server(&container_name, &config_clone.image_name, &port.to_string(), config_clone.max_players).await {
                                         Ok((_, server_id)) => {
                                             let server_info = ServerInfo {
                                                 container_id: server_id,
-                                                address: format!("10.0.0.203:{}", port),
+                                                address: format!("{}:{}", config_clone.server_url, port),
                                                 players_online: 0,
-                                                max_players: 100,
+                                                max_players: config_clone.max_players,
                                                 status: Status::Starting,
                                             };
+
                                             let _ = db_clone.save_server(&server_info).await;
                                             println!("🚀 Instance '{}' lancée avec succès sur le port recyclé {}", container_name, port);
                                         },

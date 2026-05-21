@@ -48,7 +48,7 @@ services:
     build:
       context: ..
       dockerfile: docker/server.Dockerfile
-    image: uqac_t3_mmo-server:local
+    image: ${SERVER_IMAGE}
     command: ["echo", "✅ Build de l'image du serveur terminé avec succès !"]
 
   orchestrator:
@@ -60,6 +60,10 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG}
       - REDIS_URL=${REDIS_URL}
+      - MIN_AVAILABLE_SERVERS=${MIN_AVAILABLE_SERVERS}
+      - SERVER_IMAGE=${SERVER_IMAGE}
+      - SERVER_URL=${SERVER_URL}
+      - SERVER_MAX_PLAYERS=${SERVER_MAX_PLAYERS}
     depends_on:
       redis:
         condition: service_started
