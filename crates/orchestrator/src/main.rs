@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-use tokio::signal;
 use futures::StreamExt;
 
 #[derive(Deserialize)]
@@ -99,9 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
-            _ = signal::ctrl_c() => {
-                println!("\n🛑 Signal d'arrêt reçu, fermeture...");
-                let _ = orchestrator_peer.shutdown();
+            _ = wait_for_shutdown() => {
+                println!("Début du shutdown...");
                 break;
             }
 
@@ -264,5 +262,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    println!("🧹 [Shutdown] Nettoyage des instances de jeu en cours...");
+
+    if let Ok(servers) = database.get_all_servers().await {
+        for server in servers {
+            if let Some(port_str) = server.address.split(':').last() {
+                let container_name = format!("game-shard-{}", port_str);
+                println!("🔪 [Shutdown] Destruction de {}", container_name);
+
+                let _ = docker_manager.remove_game_server(&container_name).await;
+
+                let _ = database.remove_server(&server.container_id, port_str).await;
+            }
+        }
+    }
+
+    println!("💤 [Shutdown] Tous les serveurs de jeu ont été coupés. Extinction du réseau...");
+    let _ = orchestrator_peer.shutdown();
+    println!("👋 Bye !");
+
     Ok(())
+
+}
+
+async fn wait_for_shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("Impossible d'écouter SIGTERM");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Impossible d'écouter SIGINT");
+
+        tokio::select! {
+            _ = sigterm.recv() => { println!("\n🛑 SIGTERM (ex: Docker stop) reçu."); }
+            _ = sigint.recv() => { println!("\n🛑 SIGINT (CTRL+C) reçu."); }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_c, ctrl_break};
+        let mut ctrl_c_signal = ctrl_c().expect("Impossible d'écouter CTRL+C");
+        let mut ctrl_break_signal = ctrl_break().expect("Impossible d'écouter CTRL+BREAK");
+
+        tokio::select! {
+            _ = ctrl_c_signal.recv() => { println!("\n🛑 Signal CTRL+C (Windows) reçu."); }
+            _ = ctrl_break_signal.recv() => { println!("\n🛑 Signal CTRL+BREAK (Windows) reçu."); }
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        println!("\n🛑 Signal d'arrêt générique reçu.");
+    }
 }
