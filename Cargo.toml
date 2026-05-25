@@ -1,11 +1,11 @@
-﻿[workspace]
+[workspace]
 members = [
     "crates/shared",
     "crates/client",
     "crates/server",
     "crates/orchestrator",
     "crates/gatekeeper"
-]
+, "crates/broker"]
 resolver = "2"
 
 [workspace.dependencies]

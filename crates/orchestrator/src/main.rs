@@ -26,7 +26,6 @@ pub struct HeartbeatPayload {
 pub struct ServerConfig {
     pub image_name: String,
     pub max_players: usize,
-    pub server_url: String,
 }
 
 impl ServerConfig {
@@ -38,8 +37,6 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "75".to_string())
                 .parse()
                 .expect("⚠️ SERVER_MAX_PLAYER doit être un nombre entier valide"),
-            server_url: std::env::var("SERVER_URL")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
         }
     }
 }
@@ -144,17 +141,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                 tokio::spawn(async move {
                                     match docker_clone.spawn_game_server(&container_name, &config_clone.image_name, &port.to_string(), config_clone.max_players).await {
-                                        Ok((_, server_id)) => {
+                                        Ok((_, server_id, shard_ip)) => {
                                             let server_info = ServerInfo {
                                                 container_id: server_id,
-                                                address: format!("{}:{}", config_clone.server_url, port),
+                                                address: format!("{}:{}", shard_ip, port),
                                                 players_online: 0,
                                                 max_players: config_clone.max_players,
                                                 status: Status::Starting,
                                             };
 
                                             let _ = db_clone.save_server(&server_info).await;
-                                            println!("🚀 Instance '{}' lancée avec succès sur le port recyclé {}", container_name, port);
+                                            println!("🚀 Instance '{}' lancée avec succès sur l'IP interne {}:{}", container_name, shard_ip, port);
                                         },
                                         Err(e) => eprintln!("❌ Échec lancement {} : {}", container_name, e),
                                     }

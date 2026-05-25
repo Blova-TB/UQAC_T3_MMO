@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 pub struct DockerOrchestrator {
     docker: Docker,
     orchestrator_ip: String,
+    broker_ip: String,
 }
 
 impl DockerOrchestrator {
@@ -20,33 +21,29 @@ impl DockerOrchestrator {
             .trim()
             .to_string();
 
-        println!("🔍 [Orchestrateur] Mon identifiant Docker est : {}", my_id);
-
+        // 1. Récupération de l'IP de l'Orchestrateur
         let orchestrator_ip = match docker.inspect_container(&my_id, None).await {
-            Ok(inspect_result) => {
-                inspect_result
-                    .network_settings
-                    .and_then(|settings| settings.networks)
-                    .and_then(|networks| {
-                        networks.get("game-network")
-                            .and_then(|net| net.ip_address.clone())
-                            .filter(|ip| !ip.is_empty())
-                    })
-                    .unwrap_or_else(|| {
-                        eprintln!("⚠️ Impossible de trouver l'IP sur 'game-network'. Fallback local.");
-                        "127.0.0.1".to_string()
-                    })
-            }
+            Ok(inspect_result) => Self::extract_ip_from_inspection(&inspect_result, "game-network")
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
             Err(bollard::errors::Error::DockerResponseServerError { status_code: 404, .. }) => {
-                println!("⚠️ Conteneur '{}' introuvable. Mode Dev (local) détecté.", my_id);
                 std::env::var("ORCHESTRATOR_IP").unwrap_or_else(|_| "127.0.0.1".to_string())
             }
             Err(e) => return Err(e.into()),
         };
 
-        println!("✅ [Orchestrateur] Mon IP brute (sur game-network) est : {}", orchestrator_ip);
+        // 2. Récupération unique et définitive de l'IP du Broker
+        let broker_ip = match docker.inspect_container("broker", None).await {
+            Ok(inspect_result) => Self::extract_ip_from_inspection(&inspect_result, "game-network")
+                .context("Le Broker est introuvable sur le game-network.")?,
+            Err(_) => {
+                println!("⚠️ Conteneur 'broker' introuvable. Fallback mode Dev (local).");
+                "127.0.0.1".to_string()
+            }
+        };
 
-        Ok(Self { docker, orchestrator_ip })
+        println!("✅ [Orchestrateur] Mon IP : {} | IP Broker mise en cache : {}", orchestrator_ip, broker_ip);
+
+        Ok(Self { docker, orchestrator_ip, broker_ip })
     }
 
     pub async fn spawn_game_server(
@@ -55,13 +52,11 @@ impl DockerOrchestrator {
         image_name: &str,
         external_port: &str,
         max_players: usize,
-    ) -> Result<(String, String)> {
+    ) -> Result<(String, String, String)> {
 
         let server_id = Uuid::new_v4().to_string();
-
-        // 1. On mappe le port dynamique vers LUI-MÊME
         let internal_port_str = format!("{}/udp", external_port);
-        
+
         let mut port_bindings = HashMap::new();
         port_bindings.insert(
             internal_port_str.clone(),
@@ -71,6 +66,8 @@ impl DockerOrchestrator {
             }]),
         );
 
+        let broker_addr = format!("{}:5000", self.broker_ip);
+
         let config = ContainerCreateBody {
             image: Some(image_name.to_string()),
             env: Some(vec![
@@ -78,6 +75,7 @@ impl DockerOrchestrator {
                 format!("SERVER_ID={}", server_id),
                 format!("GAME_PORT={}", external_port),
                 format!("SERVER_MAX_PLAYERS={}", max_players),
+                format!("BROKER_ADDR={}", broker_addr),
             ]),
             host_config: Some(HostConfig {
                 port_bindings: Some(port_bindings),
@@ -99,7 +97,13 @@ impl DockerOrchestrator {
         self.docker.start_container(&response.id, None::<StartContainerOptions>).await
             .context(format!("Échec du démarrage du conteneur {}", container_name))?;
 
-        Ok((response.id, server_id))
+        let inspect_result = self.docker.inspect_container(&response.id, None).await
+            .context(format!("Échec de l'inspection du conteneur {}", container_name))?;
+
+        let internal_ip = Self::extract_ip_from_inspection(&inspect_result, "game-network")
+            .context(format!("Impossible de trouver l'IP du conteneur {} sur game-network", container_name))?;
+
+        Ok((response.id, server_id, internal_ip))
     }
     pub async fn remove_game_server(&self, container_name: &str) -> Result<()> {
         let options = Some(RemoveContainerOptions {
@@ -118,5 +122,17 @@ impl DockerOrchestrator {
                 Err(e.into())
             }
         }
+    }
+
+    fn extract_ip_from_inspection(inspect_result: &bollard::models::ContainerInspectResponse, network_name: &str) -> Option<String> {
+        inspect_result
+            .network_settings
+            .as_ref()?
+            .networks
+            .as_ref()?
+            .get(network_name)?
+            .ip_address
+            .clone()
+            .filter(|ip| !ip.is_empty())
     }
 }

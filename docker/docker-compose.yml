@@ -69,6 +69,8 @@ services:
         condition: service_started
       server-builder:
         condition: service_completed_successfully
+      broker:
+        condition: service_healthy
     networks:
       - game-network
     volumes:
@@ -100,6 +102,24 @@ services:
       - "6379:6379"
     networks:
       - game-network
+
+  broker:
+    container_name: broker
+    build:
+      context: ..
+      dockerfile: docker/broker.Dockerfile
+    ports:
+      - "5000:5000/udp"
+    environment:
+      - RUST_LOG=${RUST_LOG}
+    networks:
+      - game-network
+    healthcheck:
+      test: [ "CMD-SHELL", "ss -unl | grep :5000 || exit 1" ]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
 
 networks:
   game-network:
