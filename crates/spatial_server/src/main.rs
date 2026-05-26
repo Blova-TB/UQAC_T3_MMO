@@ -27,7 +27,11 @@ fn handle_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) {
 
         None => {
             eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");
-        },
+        }
+
+        _ => {
+            eprintln!("Paquet reçu mais pas encore géré dans le SpatialService.");
+        }
     }
 }
 
@@ -103,47 +107,6 @@ impl SpatialService {
 
 // a mettre dans shared -----------------------------------------
 
-pub struct PositionUpdate {
-    pub client_id: u32,
-    pub pos: Vec2<f32>,
-}
-
-pub struct SubdivideUpdate {
-    pub shard_id: u32,
-}
-
-pub struct PlayerJoinUpdate {
-    pub client_id: u32,
-    pub pos: Vec2<f32>,
-}
-
-pub enum SpatialServerPacket {
-    Position(PositionUpdate),
-    Subdivide(SubdivideUpdate),
-    PlayerJoin(PlayerJoinUpdate),
-}
-
-impl SpatialServerPacket {
-    pub fn try_from_bytes(data: Bytes) -> Option<Self> {
-        if data.is_empty() {
-            return None;
-        }
-        let tag = data[0];
-        match tag {
-            PositionUpdate::TAG => {
-                PositionUpdate::try_from_bytes(data).map(SpatialServerPacket::Position)
-            }
-            SubdivideUpdate::TAG => {
-                SubdivideUpdate::try_from_bytes(data).map(SpatialServerPacket::Subdivide)
-            }
-            PlayerJoinUpdate::TAG => {
-                PlayerJoinUpdate::try_from_bytes(data).map(SpatialServerPacket::PlayerJoin)
-            }
-            _ => None,
-        }
-    }
-}
-
 pub trait SpatialServerBinaryPacket: Sized {
     const TAG: u8;
     const PACKET_SIZE: usize;
@@ -171,67 +134,150 @@ pub trait SpatialServerBinaryPacket: Sized {
     }
 }
 
-impl SpatialServerBinaryPacket for PositionUpdate {
-    const TAG: u8 = 0x10;
-    const PACKET_SIZE: usize = 13;
+pub trait BinaryField {
+    const SIZE: usize;
+    fn read_from(data: &mut Bytes) -> Self;
+    fn write_to(&self, buf: &mut Vec<u8>);
+}
+
+impl BinaryField for u32 {
+    const SIZE: usize = 4;
 
     #[inline]
-    fn parse_payload(data: &mut Bytes) -> Option<Self> {
-        let client_id = data.get_u32_le();
-        let x = data.get_f32_le();
-        let y = data.get_f32_le();
-
-        Some(Self {
-            client_id,
-            pos: Vec2::new(x, y),
-        })
+    fn read_from(data: &mut Bytes) -> Self {
+        data.get_u32_le()
     }
 
     #[inline]
-    fn write_payload(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.client_id.to_le_bytes());
-        buf.extend_from_slice(&self.pos.x.to_le_bytes());
-        buf.extend_from_slice(&self.pos.y.to_le_bytes());
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.to_le_bytes());
     }
 }
 
-impl SpatialServerBinaryPacket for SubdivideUpdate {
-    const TAG: u8 = 0x11;
-    const PACKET_SIZE: usize = 5;
+impl BinaryField for Vec2<f32> {
+    const SIZE: usize = 8;
 
     #[inline]
-    fn parse_payload(data: &mut Bytes) -> Option<Self> {
-        Some(Self {
-            shard_id: data.get_u32_le(),
-        })
+    fn read_from(data: &mut Bytes) -> Self {
+        Vec2::new(data.get_f32_le(), data.get_f32_le())
     }
 
     #[inline]
-    fn write_payload(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.shard_id.to_le_bytes());
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.x.to_le_bytes());
+        buf.extend_from_slice(&self.y.to_le_bytes());
     }
 }
 
-impl SpatialServerBinaryPacket for PlayerJoinUpdate {
-    const TAG: u8 = 0x12;
-    const PACKET_SIZE: usize = 13;
+macro_rules! define_packet {
+    (
+        // Syntaxe attendue : struct NomDuPaquet(TAG) { champ: Type, ... }
+        $struct_name:ident($tag:expr) {
+            $( $field_name:ident : $field_type:ty ),* $(,)?
+        }
+    ) => {
+        // 1. Génération de la structure
+        pub struct $struct_name {
+            $( pub $field_name: $field_type, )*
+        }
 
-    #[inline]
-    fn parse_payload(data: &mut Bytes) -> Option<Self> {
-        let client_id = data.get_u32_le();
-        let x = data.get_f32_le();
-        let y = data.get_f32_le();
+        // 2. Implémentation du trait principal
+        impl SpatialServerBinaryPacket for $struct_name {
+            const TAG: u8 = $tag;
 
-        Some(Self {
-            client_id,
-            pos: Vec2::new(x, y),
-        })
+            // Calcul de la taille : 1 octet (TAG) + somme des tailles des champs
+            const PACKET_SIZE: usize = 1 $( + <$field_type as BinaryField>::SIZE )*;
+
+            #[inline]
+            fn parse_payload(data: &mut Bytes) -> Option<Self> {
+                Some(Self {
+                    $( $field_name: <$field_type as BinaryField>::read_from(data), )*
+                })
+            }
+
+            #[inline]
+            fn write_payload(&self, buf: &mut Vec<u8>) {
+                $( self.$field_name.write_to(buf); )*
+            }
+        }
+    };
+}
+
+macro_rules! define_packet_router {
+    (
+        $vis:vis enum $enum_name:ident {
+            // Accepte une liste de variantes sous la forme `NomVariante(TypeStructure)`
+            $( $variant:ident($packet_type:ty) ),* $(,)?
+        }
+    ) => {
+        // 1. Génération de l'Enum
+        $vis enum $enum_name {
+            $( $variant($packet_type), )*
+        }
+
+        // 2. Génération de l'implémentation de routage
+        impl $enum_name {
+            pub fn try_from_bytes(data: Bytes) -> Option<Self> {
+                if data.is_empty() {
+                    return None;
+                }
+
+                let tag = data[0];
+
+                match tag {
+                    $(
+                        // Utilise les constantes associées du trait BinaryPacket
+                        <$packet_type>::TAG => {
+                            <$packet_type>::try_from_bytes(data).map(Self::$variant)
+                        }
+                    )*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+define_packet_router! {
+    pub enum SpatialServerPacket {
+        Subscribe(Subscribe),
+        Unsubscribe(Unsubscribe),
+        Position(PositionUpdate),
+        Subdivide(SubdivideUpdate),
+        PlayerJoin(PlayerJoinUpdate),
     }
+}
 
-    #[inline]
-    fn write_payload(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.client_id.to_le_bytes());
-        buf.extend_from_slice(&self.pos.x.to_le_bytes());
-        buf.extend_from_slice(&self.pos.y.to_le_bytes());
+define_packet! {
+    Subscribe(0x01) {
+        client_id: u32,
+        shard_id: u32,
+    }
+}
+
+define_packet! {
+    Unsubscribe(0x02) {
+        client_id: u32,
+        shard_id: u32,
+    }
+}
+
+define_packet! {
+    PositionUpdate(0x10) {
+        client_id: u32,
+        pos: Vec2<f32>,
+    }
+}
+
+define_packet!{
+    SubdivideUpdate(0x11) {
+        shard_id: u32,
+    }
+}
+
+define_packet!{
+    PlayerJoinUpdate(0x12) {
+        client_id: u32,
+        pos: Vec2<f32>,
     }
 }

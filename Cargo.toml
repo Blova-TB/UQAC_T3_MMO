@@ -5,7 +5,7 @@ members = [
     "crates/server",
     "crates/orchestrator",
     "crates/gatekeeper",
-    "crates/Spatial_Server"
+    "crates/spatial_server"
 ]
 resolver = "2"
 
