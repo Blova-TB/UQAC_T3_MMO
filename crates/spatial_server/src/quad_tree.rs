@@ -49,7 +49,7 @@ impl QuadTree {
         }
     }
 
-    pub fn id_shard_for(&self, pos: Vec2<f32>) -> Option<ShardId> {
+    pub fn shard_id_for(&self, pos: Vec2<f32>) -> Option<ShardId> {
         Some(self.shard_for(pos)?.shard_id?)
     }
 
@@ -96,14 +96,14 @@ impl QuadTree {
         }
     }
 
-    pub fn insert(&mut self, client_id: u32, pos: Vec2<f32>) -> Option<ShardId> {
+    pub fn insert_player(&mut self, client_id: u32, pos: Vec2<f32>) -> Option<ShardId> {
         if !self.bounds.contains(pos) {
             return None;
         }
 
         if let Some(children) = &mut self.children {
             for child in children.iter_mut() {
-                if let Some(shard) = child.insert(client_id, pos) {
+                if let Some(shard) = child.insert_player(client_id, pos) {
                     return Some(shard);
                 }
             }
@@ -112,6 +112,18 @@ impl QuadTree {
 
         self.players.insert(client_id, pos);
         self.shard_id
+    }
+    
+    pub fn remove_player(&mut self, client_id: u32, shard_id: ShardId) -> Option<()> {
+
+        let mut current_node = self;
+
+        for quadrant in shard_id.id_to_path() {
+            current_node = current_node.get_shard(quadrant)?;
+        };
+
+        current_node.players.remove(&client_id)?;
+        Some(())
     }
 
     pub fn subdivide_quad_tree(&mut self) -> Vec<(u32, ShardId)> {
@@ -148,7 +160,6 @@ impl QuadTree {
 
         let mut player_moved: Vec<(u32, ShardId)> = Vec::new();
 
-        // todo : faire un check si les joueurs sont pas deja ailleurs ? (inutile mais plus safe)
         for (id, pos) in self.players.drain() {
             for child in children.iter_mut() {
                 if child.bounds.contains(pos) {
@@ -161,6 +172,7 @@ impl QuadTree {
             }
         }
 
+        self.players.clear();
         self.children = Some(children);
         self.shard_id = None;
 

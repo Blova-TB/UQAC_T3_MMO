@@ -46,19 +46,20 @@ impl SpatialService {
         }
     }
 
-    // je sais pas si il faut que ca fonctionne si c'est un nouveau ou pas.
-    // pour le moment ca renvoie un NONE
     pub fn process_update(&mut self, update_data: PositionUpdate)->Option<()>{
         update_data.client_id;
         update_data.pos;
-        // todo mettre a jour dans l'arbre aussi !
-        let new_shard_id: ShardId = self.quad_tree.id_shard_for(update_data.pos)?;
-        let old_shard_id: ShardId = self.client_to_shards.insert(update_data.client_id, new_shard_id)?;
 
-        if new_shard_id != old_shard_id{
-            // TODO : faire les modif du pub sub
-        };
+        let new_shard_id: ShardId = self.quad_tree.insert_player(update_data.client_id,update_data.pos)?;
+        let old_shard_id = self.client_to_shards.insert(update_data.client_id, new_shard_id);
 
+        if !old_shard_id.is_none() {
+            self.quad_tree.remove_player(update_data.client_id, old_shard_id?)?;
+            // TODO : faire les modif du pub sub pour old_shard_id
+        }
+        if old_shard_id.is_none() || old_shard_id? != new_shard_id {
+            // TODO : faire les modif du pub sub pour new_shard_id
+        }
         Some(())
     }
 
@@ -90,7 +91,7 @@ impl SpatialService {
         update_data.client_id;
         update_data.pos;
 
-        let new_shard_id: ShardId = self.quad_tree.insert(update_data.client_id,update_data.pos)?;
+        let new_shard_id: ShardId = self.quad_tree.insert_player(update_data.client_id,update_data.pos)?;
 
         self.client_to_shards.insert(update_data.client_id,new_shard_id);
 
