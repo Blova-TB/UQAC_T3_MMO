@@ -63,6 +63,53 @@ impl BinaryField for Vec2<f32> {
     }
 }
 
+impl BinaryField for u16 {
+    const SIZE: usize = 2;
+
+    #[inline]
+    fn read_from(data: &mut Bytes) -> Self {
+        data.get_u16_le()
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+impl BinaryField for Vec<u8>{
+    const SIZE: usize = 0;
+
+    #[inline]
+    fn read_from(data: &mut Bytes) -> Self {
+        let len = data.remaining();
+        let mut buf = vec![0; len];
+        data.copy_to_slice(&mut buf);
+        buf
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(self);
+    }
+}
+
+impl<const N: usize> BinaryField for [u8; N] {
+    const SIZE: usize = N;
+
+    #[inline]
+    fn read_from(data: &mut Bytes) -> Self {
+        let mut arr = [0; N];
+        data.copy_to_slice(&mut arr);
+        arr
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(self);
+    }
+}
+
 #[macro_export]
 macro_rules! define_packet {
     (
