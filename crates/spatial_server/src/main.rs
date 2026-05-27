@@ -1,106 +1,105 @@
 mod quad_tree;
 mod shard_id;
+mod network;
+mod spatial_service;
 
-use ahash::AHashMap;
-use bytes::{Buf, Bytes};
-use quad_tree::{QuadTree, Rect};
-use crate::shard_id::{ShardId};
-use shared::models::{PositionUpdate, SubdivideUpdate, PlayerJoinUpdate, SpatialServerPacket};
+use bytes::Bytes;
+use quad_tree::Rect;
+use shared::models::SpatialServerPacket;
+use std::time::{Duration, Instant};
+use mathtools::Vec2;
+use crate::network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
+use crate::spatial_service::SpatialService;
 
 fn main() {
     println!("Hello, world!");
-}
+    let mut spatial_service = SpatialService::new(
+        Rect {
+            min: Vec2::new(0.0,0.0) ,
+            max: Vec2::new(1000.0,1000.0)
+        },
+        6,
+        10.0
+    );
 
-fn handle_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) {
-    match SpatialServerPacket::try_from_bytes(raw_bytes) {
-        Some(SpatialServerPacket::Position(update)) => {
-            spatial_service.process_update(update);
+    // Initialisation du module réseau -> a modifier avec docker
+    let mut infra_net = InfrastructureNetwork::new(
+        "127.0.0.1", 5000, // Orchestrateur
+        "127.0.0.1", 6000  // Broker
+    );
+
+    let target_tick_duration = Duration::from_secs_f64(1.0 / 60.0);
+
+    loop {
+        let frame_start = Instant::now();
+
+        let events = infra_net.poll_events();
+
+        for event in events {
+            match event {
+                InfrastructureEvent::MessageReceived { source: PeerType::Broker, data } => {
+                    handle_broker_data(data, &mut spatial_service, &mut infra_net);
+                }
+                InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
+                    handle_orchestrator_data(data, &mut spatial_service);
+                }
+                InfrastructureEvent::Disconnected { source } => {
+                    eprintln!("Connexion perdue avec {:?}", source);
+                }
+            }
         }
 
-        Some(SpatialServerPacket::Subdivide(update)) => {
-            spatial_service.process_subdivide(update);
-        }
-
-        Some(SpatialServerPacket::PlayerJoin(update)) => {
-            spatial_service.process_player_join(update);
-        }
-
-        None => {
-            eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");
-        }
-
-        _ => {
-            eprintln!("Paquet reçu mais pas encore géré dans le SpatialService.");
+        let elapsed = frame_start.elapsed();
+        if elapsed < target_tick_duration {
+            std::thread::sleep(target_tick_duration - elapsed);
         }
     }
 }
 
-pub struct SpatialService {
-    pub quad_tree: QuadTree,
-    pub client_to_shards: AHashMap<u32, ShardId>,
-    pub margin: f32,
+fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) {
+    // on recoit rien ici il me semble
+    print!("Error : Received data from Orchestrator: {:?} bytes", p0.len());
 }
 
-impl SpatialService {
-    pub fn new(bounds: Rect, max_depth: u8, margin: f32) -> Self {
-        Self {
-            quad_tree: QuadTree::new(bounds, 0, max_depth, ShardId::ROOT),
-            client_to_shards: AHashMap::new(),
-            margin,
-        }
-    }
+fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, infra_net: &mut InfrastructureNetwork) {
 
-    pub fn process_update(&mut self, update_data: PositionUpdate)->Option<()>{
-        update_data.client_id;
-        update_data.pos;
+    let cmd : Option<Vec<(PeerType,Bytes)>> =
+        match SpatialServerPacket::try_from_bytes(raw_bytes) {
+            Some(SpatialServerPacket::Position(update)) => {
+                spatial_service.process_update(update)
+            }
 
-        let new_shard_id: ShardId = self.quad_tree.insert_player(update_data.client_id,update_data.pos)?;
-        let old_shard_id = self.client_to_shards.insert(update_data.client_id, new_shard_id);
+            Some(SpatialServerPacket::Subdivide(update)) => {
+                spatial_service.process_subdivide(update)
+            }
 
-        if !old_shard_id.is_none() {
-            self.quad_tree.remove_player(update_data.client_id, old_shard_id?)?;
-            // TODO : faire les modif du pub sub pour old_shard_id
-        }
-        if old_shard_id.is_none() || old_shard_id? != new_shard_id {
-            // TODO : faire les modif du pub sub pour new_shard_id
-        }
-        Some(())
-    }
+            Some(SpatialServerPacket::PlayerJoin(update)) => {
+                spatial_service.process_player_join(update)
+            }
 
-    pub fn process_subdivide(&mut self, update_data: SubdivideUpdate) ->Option<()>{
+            None => {
+                eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");
+                None
+            }
 
-        let shard_id : ShardId = update_data.shard_id.into();
-
-        let mut current_node = &mut self.quad_tree;
-
-        for quadrant in shard_id.id_to_path() {
-            current_node = current_node.get_shard(quadrant)?;
-        }
-
-        let new_sub:Vec<(u32, ShardId)> = current_node.subdivide_quad_tree();
-        let mut old_sub:Vec<(u32, ShardId)> = Vec::new();
-
-        for (player_id, shard_id) in new_sub {
-            let old_shard = self.client_to_shards.insert(player_id, shard_id)?;
-            old_sub.push((player_id,old_shard));
+            _ => {
+                eprintln!("Paquet reçu mais pas encore géré dans le SpatialService.");
+                None
+            }
         };
 
-        //TODO faire les modif du pub sub enregistrées dans new_sub et old_sub
-
-        Some(())
-    }
-
-    pub fn process_player_join(&mut self, update_data: PlayerJoinUpdate) -> Option<()>{
-
-        update_data.client_id;
-        update_data.pos;
-
-        let new_shard_id: ShardId = self.quad_tree.insert_player(update_data.client_id,update_data.pos)?;
-
-        self.client_to_shards.insert(update_data.client_id,new_shard_id);
-
-        // Todo : faire les modif du pub sub
-
-        Some(())
+    if let Some(packets) = cmd {
+        for (peer_type, data) in packets {
+            match peer_type {
+                PeerType::Broker => {
+                    let _ = infra_net.send_to_broker(data);
+                }
+                PeerType::Orchestrator => {
+                    let _ = infra_net.send_to_orchestrator(data);
+                }
+            }
+        }
+    }else {
+        println!("Error processing packet, no response generated.");
     }
 }

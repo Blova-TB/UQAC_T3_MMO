@@ -1,7 +1,7 @@
 ﻿use bytes::{Buf, Bytes};
 use mathtools::Vec2;
 
-pub trait SpatialServerBinaryPacket: Sized {
+pub trait ServerBinaryPacket: Sized {
     const TAG: u8;
     const PACKET_SIZE: usize;
 
@@ -124,7 +124,7 @@ macro_rules! define_packet {
         }
 
         // 2. Implémentation du trait principal
-        impl SpatialServerBinaryPacket for $struct_name {
+        impl ServerBinaryPacket for $struct_name {
             const TAG: u8 = $tag;
 
             // Calcul de la taille : 1 octet (TAG) + somme des tailles des champs

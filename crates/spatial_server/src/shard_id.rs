@@ -1,4 +1,6 @@
 ﻿use std::fmt;
+use mathtools::Vec2;
+use crate::quad_tree::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Quadrant {
@@ -7,6 +9,23 @@ pub enum Quadrant {
     BottomLeft = 0b10,
     BottomRight = 0b11,
 }
+
+impl Quadrant {
+    pub fn get_all() -> [Quadrant; 4] {
+        [Quadrant::TopLeft, Quadrant::TopRight, Quadrant::BottomLeft, Quadrant::BottomRight]
+    }
+    
+    pub fn get_bound_from_parent(&self, parent_bounds: &Rect) -> Rect {
+        let center = parent_bounds.center();
+        match self {
+            Quadrant::TopLeft => Rect { min: Vec2 { x: parent_bounds.min.x, y: center.y }, max: Vec2 { x: center.x, y: parent_bounds.max.y } },
+            Quadrant::TopRight => Rect { min: center, max: parent_bounds.max },
+            Quadrant::BottomLeft => Rect { min: parent_bounds.min, max: center },
+            Quadrant::BottomRight => Rect { min: Vec2 { x: center.x, y: parent_bounds.min.y }, max: Vec2 { x: parent_bounds.max.x, y: center.y } },
+        }
+    }
+}
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ShardId(pub u32);

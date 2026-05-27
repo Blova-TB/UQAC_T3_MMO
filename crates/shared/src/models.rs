@@ -1,7 +1,7 @@
 ﻿use serde::{Deserialize, Serialize};
 use mathtools::Vec2;
 use crate::{define_packet, define_packet_router};
-use crate::models_trait_and_macro::{BinaryField, SpatialServerBinaryPacket};
+pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
@@ -122,5 +122,19 @@ define_packet!{
 define_packet!{
     HandoffComplete(0x24) {
         entity_id: u32,
+    }
+}
+
+define_packet!{
+    SpawnServer(0x30) {
+        shard_id: u32,
+        pos_min: Vec2<f32>,
+        pos_max: Vec2<f32>,
+    }
+}
+
+define_packet!{
+    ShutdownServer(0x31) {
+        shard_id: u32,
     }
 }
