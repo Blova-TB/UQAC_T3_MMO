@@ -4,35 +4,56 @@ mod network;
 mod spatial_service;
 
 use bytes::Bytes;
-use quad_tree::Rect;
 use shared::models::SpatialServerPacket;
 use std::time::{Duration, Instant};
+use std::env;
 use mathtools::Vec2;
-use crate::network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
-use crate::spatial_service::SpatialService;
+use quad_tree::Rect;
+use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
+use spatial_service::SpatialService;
 
 fn main() {
-    println!("Hello, world!");
+    println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");
     let mut spatial_service = SpatialService::new(
         Rect {
-            min: Vec2::new(0.0,0.0) ,
-            max: Vec2::new(1000.0,1000.0)
+            min: Vec2::new(0.0, 0.0),
+            max: Vec2::new(1000.0, 1000.0)
         },
         6,
         10.0
     );
 
-    // Initialisation du module réseau -> a modifier avec docker
+    // Extraction stricte des variables d'environnement
+    let orchestrator_addr = env::var("ORCHESTRATOR_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    let orchestrator_port: u16 = env::var("ORCHESTRATOR_PORT")
+        .unwrap_or_else(|_| "5000".to_string())
+        .parse()
+        .expect("ORCHESTRATOR_PORT doit être un nombre valide (u16)");
+
+    let broker_addr = env::var("BROKER_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    let broker_port: u16 = env::var("BROKER_PORT")
+        .unwrap_or_else(|_| "6000".to_string())
+        .parse()
+        .expect("BROKER_PORT doit être un nombre valide (u16)");
+
+    println!(
+        "Démarrage SpatialServer. Cible Orchestrateur: {}:{} | Cible Broker: {}:{}",
+        orchestrator_addr, orchestrator_port, broker_addr, broker_port
+    );
+
     let mut infra_net = InfrastructureNetwork::new(
-        "127.0.0.1", 5000, // Orchestrateur
-        "127.0.0.1", 6000  // Broker
+        &orchestrator_addr, orchestrator_port,
+        &broker_addr, broker_port
     );
 
     let target_tick_duration = Duration::from_secs_f64(1.0 / 60.0);
 
     loop {
         let frame_start = Instant::now();
-
         let events = infra_net.poll_events();
 
         for event in events {
@@ -53,6 +74,7 @@ fn main() {
         if elapsed < target_tick_duration {
             std::thread::sleep(target_tick_duration - elapsed);
         }
+        print!("\rTick processed in {:?} ms", elapsed.as_millis());
     }
 }
 

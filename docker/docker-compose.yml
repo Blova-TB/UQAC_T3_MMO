@@ -101,6 +101,24 @@ services:
     networks:
       - game-network
 
+  spatial-server:
+    build:
+      context: ..
+      dockerfile: docker/spatial_server.Dockerfile
+    environment:
+      # Utilisation de la résolution DNS interne de Docker pour cibler le conteneur orchestrator
+      - ORCHESTRATOR_ADDR=orchestrator
+      - ORCHESTRATOR_PORT=4000
+
+      - BROKER_ADDR=${BROKER_ADDR:-broker}
+      - BROKER_PORT=${BROKER_PORT:-6000}
+
+      - RUST_LOG=${RUST_LOG:-info}
+    depends_on:
+      - orchestrator
+    networks:
+      - game-network
+
 networks:
   game-network:
     driver: bridge
