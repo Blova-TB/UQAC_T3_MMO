@@ -58,6 +58,11 @@ impl SpatialService {
             current_node = current_node.get_shard(quadrant)?;
         }
 
+        if current_node.depth >= current_node.max_depth {
+            print!("Shard {:?} is already at max depth, cannot subdivide further.", shard_id);
+            return None;
+        }
+
         let new_sub:Vec<(u32, ShardId)> = current_node.subdivide_quad_tree();
         let mut old_sub:Vec<(u32, ShardId)> = Vec::new();
 

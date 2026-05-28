@@ -6,7 +6,8 @@ mod spatial_service;
 use bytes::Bytes;
 use shared::models::SpatialServerPacket;
 use std::time::{Duration, Instant};
-use std::env;
+use std::{env, io};
+use std::io::Write;
 use mathtools::Vec2;
 use quad_tree::Rect;
 use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
@@ -56,18 +57,41 @@ fn main() {
         let frame_start = Instant::now();
         let events = infra_net.poll_events();
 
+        let mut cmd: Vec<(PeerType, Bytes)> = Vec::new();
+
         for event in events {
-            match event {
-                InfrastructureEvent::MessageReceived { source: PeerType::Broker, data } => {
-                    handle_broker_data(data, &mut spatial_service, &mut infra_net);
-                }
-                InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
-                    handle_orchestrator_data(data, &mut spatial_service);
-                }
-                InfrastructureEvent::Disconnected { source } => {
-                    eprintln!("Connexion perdue avec {:?}", source);
+            let event_result : Option<Vec<(PeerType,Bytes)>> =
+                match event {
+                    InfrastructureEvent::MessageReceived { source: PeerType::Broker, data } => {
+                        handle_broker_data(data, &mut spatial_service, &mut infra_net)
+                    }
+                    InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
+                        handle_orchestrator_data(data, &mut spatial_service)
+                    }
+                    InfrastructureEvent::Disconnected { source } => {
+                        eprintln!("Connexion perdue avec {:?}", source);
+                        None
+                    }
+                };
+
+            if let Some(mut new_packets) = event_result {
+                cmd.append(&mut new_packets);
+            }
+        }
+
+        if !cmd.is_empty() {
+            for (peer_type, data) in cmd {
+                match peer_type {
+                    PeerType::Broker => {
+                        let _ = infra_net.send_to_broker(data);
+                    }
+                    PeerType::Orchestrator => {
+                        let _ = infra_net.send_to_orchestrator(data);
+                    }
                 }
             }
+        }else {
+            println!("Error processing packet, no response generated.");
         }
 
         let elapsed = frame_start.elapsed();
@@ -75,15 +99,19 @@ fn main() {
             std::thread::sleep(target_tick_duration - elapsed);
         }
         print!("\rTick processed in {:?} ms", elapsed.as_millis());
+        if let Err(e) = io::stdout().flush() {
+            eprintln!("Erreur lors du flush stdout: {}", e);
+        }
     }
 }
 
-fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) {
+fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     // on recoit rien ici il me semble
     print!("Error : Received data from Orchestrator: {:?} bytes", p0.len());
+    None
 }
 
-fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, infra_net: &mut InfrastructureNetwork) {
+fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, infra_net: &mut InfrastructureNetwork) -> Option<Vec<(PeerType,Bytes)>> {
 
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match SpatialServerPacket::try_from_bytes(raw_bytes) {
@@ -109,19 +137,5 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, in
                 None
             }
         };
-
-    if let Some(packets) = cmd {
-        for (peer_type, data) in packets {
-            match peer_type {
-                PeerType::Broker => {
-                    let _ = infra_net.send_to_broker(data);
-                }
-                PeerType::Orchestrator => {
-                    let _ = infra_net.send_to_orchestrator(data);
-                }
-            }
-        }
-    }else {
-        println!("Error processing packet, no response generated.");
-    }
+    cmd
 }
