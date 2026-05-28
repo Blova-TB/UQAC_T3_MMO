@@ -1,10 +1,11 @@
-﻿[workspace]
+[workspace]
 members = [
     "crates/shared",
     "crates/client",
     "crates/server",
     "crates/orchestrator",
-    "crates/gatekeeper"
+    "crates/gatekeeper",
+    "crates/spatial_server"
 ]
 resolver = "2"
 
