@@ -32,14 +32,17 @@ pub struct ShardId(pub u32);
 
 impl ShardId {
 
-    const DEPTH_MASK: u32 = 0xF000_0000;
-    const DEPTH_SHIFT: u8 = 28;
-    pub const MAX_DEPTH: u8 = 14;
-    pub const ROOT: Self = Self(0);
+    const SPACIAL_SIGN : u32 = 0x1000_0000;
+    const SIGN_MASK: u32 = 0xF000_0000;
+    const DEPTH_MASK: u32 = 0x0F00_0000;
+    const QUADRANT_MASK: u32 = 0x00FF_FFFF;
+    const DEPTH_SHIFT: u8 = 24;
+    pub const MAX_DEPTH: u8 = 12;
+    pub const ROOT: Self = Self(0 | Self::SPACIAL_SIGN);
 
     #[inline]
     pub fn depth(self) -> u8 {
-        (self.0 >> Self::DEPTH_SHIFT) as u8
+        ((self.0 & Self::DEPTH_MASK) >> Self::DEPTH_SHIFT) as u8
     }
 
     pub fn new_id_for_child(self, quadrant: Quadrant) -> Self {
@@ -52,12 +55,14 @@ impl ShardId {
         let new_depth = current_depth + 1;
 
         // Màj depth
-        let mut new_id = self.0 & !Self::DEPTH_MASK;
+        let mut new_id = self.0 & Self::QUADRANT_MASK;
         new_id |= (new_depth as u32) << Self::DEPTH_SHIFT;
 
         // add quadrant
         let shift = Self::DEPTH_SHIFT - (2 * new_depth);
         new_id |= (quadrant as u32) << shift;
+
+        new_id |= Self::SPACIAL_SIGN;
 
         Self(new_id)
     }
@@ -97,6 +102,9 @@ impl fmt::Debug for ShardId {
 
 impl From <u32> for ShardId {
     fn from(value: u32) -> Self {
+        if(value & Self::SIGN_MASK) != Self::SPACIAL_SIGN {
+            panic!("Invalid ShardId value: {:08X}", value);
+        }
         Self(value)
     }
 }
