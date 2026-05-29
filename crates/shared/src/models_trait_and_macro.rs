@@ -94,6 +94,20 @@ impl BinaryField for Vec<u8>{
     }
 }
 
+impl BinaryField for f32{
+    const SIZE: usize = 4;
+
+    #[inline]
+    fn read_from(data: &mut Bytes) -> Self {
+        data.get_f32_le()
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
 impl<const N: usize> BinaryField for [u8; N] {
     const SIZE: usize = N;
 
