@@ -3,6 +3,7 @@ use bitcode::{Decode, Encode};
 use bytes::{Buf, BufMut, BytesMut};
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use crate::{ServerState, orchestrator_plugin::AssignedShard};
 
 use shared::constants::STREAM_PHYSICS;
 use crate::config::ServerConfig;
@@ -10,9 +11,12 @@ use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, Ga
 use shared::network::protocols::QuicBackend;
 use crate::player::Player;
 
+use shared::custom_id::{CustomId, IdType};
+
 pub struct NetworkServerPlugin;
 
 use std::collections::HashMap;
+use rand::{random, Rng};
 
 #[derive(Resource, Default)]
 pub struct ClientEntities(pub HashMap<u32, Entity>);
@@ -22,11 +26,11 @@ impl Plugin for NetworkServerPlugin {
         app
             .init_resource::<NetworkEncoder>()
             .init_resource::<ClientEntities>()
-            .add_systems(Startup, connect_to_broker)
+            .add_systems(OnEnter(ServerState::Active), connect_to_broker)
             .add_systems(Update, (
                 poll_broker,
                 publish_positions_to_broker,
-            ).chain());
+            ).chain().run_if(in_state(ServerState::Active)));
     }
 }
 
@@ -39,7 +43,7 @@ pub struct NetworkEncoder {
 pub struct BrokerConnection {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
-    pub topic: [u8; 32],
+    pub topic: u32,
 }
 
 // ⚠️ N'oublie pas de supprimer ces structs locales une fois que tu auras
@@ -55,7 +59,11 @@ pub struct PlayerPositionData {
     pub position: [f32; 2],
 }
 
-fn connect_to_broker(mut commands: Commands, config: Res<ServerConfig>) {
+fn connect_to_broker(
+    mut commands: Commands,
+    config: Res<ServerConfig>,
+    assigned_shard: Res<AssignedShard>, // <-- La ShardId fournie par l'Orchestrateur
+) {
     let peer = GamePeer::new(QuicBackend::new());
 
     let addr: std::net::SocketAddr = config.broker_addr.parse()
@@ -65,19 +73,15 @@ fn connect_to_broker(mut commands: Commands, config: Res<ServerConfig>) {
         panic!("Échec de connexion au Broker sur {}: {:?}", config.broker_addr, e);
     });
 
-    let mut topic = [0u8; 32];
-    let topic_str = format!("shard:{}", config.id);
-    let bytes = topic_str.as_bytes();
-    let len = bytes.len().min(32);
-    topic[..len].copy_from_slice(&bytes[..len]);
+    let shard_id_u32 = assigned_shard.0.as_u32();
 
     commands.insert_resource(BrokerConnection {
         peer,
         connection: None,
-        topic,
+        topic: shard_id_u32,
     });
 
-    println!("🔗 Shard {} tente de se connecter au Broker {}.", config.id, config.broker_addr);
+    println!("🔗 Shard assignée (ID: {}) tente de se connecter au Broker.", shard_id_u32);
 }
 
 fn poll_broker(
@@ -105,23 +109,18 @@ fn poll_broker(
                     if stream.is_reliable() {
                         println!("✅ Flux fiable ouvert. Envoi du Handshake de la Shard...");
 
-                        // On convertit l'UUID (String) en u32 via un hash
-                        let mut hasher = DefaultHasher::new();
-                        config.id.hash(&mut hasher);
-                        let shard_numeric_id = hasher.finish() as u32;
-
                         // Construction du Tag 0x00
-                        let mut handshake_msg = BytesMut::with_capacity(38);
+                        // 1 (Tag) + 1 (is_shard) + 4 (Topic/ShardId) = 6 octets ! (Au lieu de 38)
+                        let mut handshake_msg = BytesMut::with_capacity(6);
                         handshake_msg.put_u8(0x00); // Tag 0x00 : Handshake
                         handshake_msg.put_u8(0x01); // is_shard = 1 (true)
-                        handshake_msg.put_u32_le(shard_numeric_id); // ID (Little-Endian)
-                        handshake_msg.put_slice(&broker.topic); // [u8; 32] Le topic géré
+                        handshake_msg.put_u32_le(broker.topic); // Le ShardId comme topic unique
 
                         // Envoi sécurisé
                         if let Err(e) = broker.peer.send(&conn, &stream, handshake_msg.freeze().into()) {
                             eprintln!("❌ Échec de l'envoi du Handshake Shard : {:?}", e);
                         } else {
-                            println!("🌍 Shard authentifiée auprès du Broker sur le topic {:?}", String::from_utf8_lossy(&broker.topic));
+                            println!("🌍 Shard authentifiée auprès du Broker sur le ShardId {}", broker.topic);
                         }
                     }
                 }
@@ -204,21 +203,19 @@ fn publish_positions_to_broker(
     let inner_payload = encoder.buffer.encode(&sync_packet);
 
     let payload_len = inner_payload.len() as u16;
-    let mut msg = BytesMut::with_capacity(1 + 32 + 2 + inner_payload.len());
+
+    // 1 (Tag) + 4 (Topic) + 2 (Len) + X (Payload)
+    let mut msg = BytesMut::with_capacity(7 + inner_payload.len());
 
     // Tag (0x03)
     msg.put_u8(0x03);
-    // Topic ([u8; 32])
-    msg.put_slice(&broker.topic);
+    // Topic (u32 Little Endian)
+    msg.put_u32_le(broker.topic);
     // Payload Len (u16 Little Endian)
     msg.put_u16_le(payload_len);
     // Payload ([u8])
     msg.put_slice(inner_payload);
 
-    // Les updates de positions restent en non-fiable (UDP pur) pour éviter le lag !
     let stream = GameStream::new(STREAM_PHYSICS, GameStreamReliability::Unreliable);
-
-    if let Err(e) = broker.peer.send(conn, &stream, msg.freeze()) {
-        eprintln!("Erreur d'envoi de Publish au Broker : {:?}", e);
-    }
+    let _ = broker.peer.send(conn, &stream, msg.freeze());
 }

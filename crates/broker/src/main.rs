@@ -12,18 +12,18 @@ use shared::network::{GameConnection, GameNetworkEvent, GamePeer};
 // ==========================================
 
 struct ClientRoutingMeta {
-    topic: [u8; 32],
+    topic: u32,
     index_in_vec: usize,
 }
 
 #[derive(Default)]
 struct OptimizedRoutingTable {
-    topic_subscribers: AHashMap<[u8; 32], Vec<u32>>,
+    topic_subscribers: AHashMap<u32, Vec<u32>>,
     client_meta: AHashMap<u32, ClientRoutingMeta>,
 }
 
 impl OptimizedRoutingTable {
-    pub fn subscribe(&mut self, client_id: u32, topic: [u8; 32]) {
+    pub fn subscribe(&mut self, client_id: u32, topic: u32) {
         self.unsubscribe(client_id);
 
         let subs = self.topic_subscribers.entry(topic).or_default();
@@ -47,11 +47,11 @@ impl OptimizedRoutingTable {
         }
     }
 
-    pub fn get_subscribers(&self, topic: &[u8; 32]) -> Option<&[u32]> {
+    pub fn get_subscribers(&self, topic: &u32) -> Option<&[u32]> {
         self.topic_subscribers.get(topic).map(|v| v.as_slice())
     }
 
-    pub fn get_topic_for_client(&self, client_id: u32) -> Option<[u8; 32]> {
+    pub fn get_topic_for_client(&self, client_id: u32) -> Option<u32> {
         self.client_meta.get(&client_id).map(|m| m.topic)
     }
 }
@@ -64,13 +64,11 @@ impl OptimizedRoutingTable {
 struct BrokerState {
     conn_to_client: AHashMap<GameConnection, u32>,
     client_to_conn: AHashMap<u32, GameConnection>,
-    shard_conns: AHashMap<[u8; 32], GameConnection>,
+    shard_conns: AHashMap<u32, GameConnection>,
     routing_table: OptimizedRoutingTable,
 
     // === 🛠️ DEBUG MOCK SPATIAL SERVER ===
-    // On garde en mémoire le topic de la TOUTE PREMIÈRE Shard qui se connecte
-    debug_default_topic: Option<[u8; 32]>,
-    // =====================================
+    debug_default_topic: Option<u32>,
 }
 
 fn main() {
@@ -128,84 +126,73 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
         }
         GameNetworkEvent::Message { connection, stream, mut data } => {
             if data.is_empty() { return; }
-
             let tag = data.get_u8();
 
             match tag {
+                // Handshake (Shard ou Client)
                 0x00 => {
                     if data.remaining() < 5 { return; }
                     let is_shard = data.get_u8() == 1;
-                    let id = data.get_u32_le();
+                    let id = data.get_u32_le(); // C'est notre CustomId !
 
                     if is_shard {
-                        if data.remaining() >= 32 {
-                            let mut topic = [0u8; 32];
-                            data.copy_to_slice(&mut topic);
-                            state.shard_conns.insert(topic, connection);
-                            info!("🌍 Shard enregistrée pour le topic {:?}", String::from_utf8_lossy(&topic));
+                        let shard_id = id; // L'ID *EST* le topic !
+                        state.shard_conns.insert(shard_id, connection);
+                        info!("🌍 Shard enregistrée pour le ShardId {:?}", shard_id);
 
-                            // === 🛠️ DEBUG MOCK SPATIAL SERVER ===
-                            if state.debug_default_topic.is_none() {
-                                state.debug_default_topic = Some(topic);
-                                warn!("🛠️ [DEBUG] La Shard {:?} est définie comme Shard Globale par défaut !", String::from_utf8_lossy(&topic));
+                        // === 🛠️ DEBUG MOCK SPATIAL SERVER ===
+                        if state.debug_default_topic.is_none() {
+                            state.debug_default_topic = Some(shard_id);
+                            warn!("🛠️ [DEBUG] La Shard {:?} est la Shard Globale par défaut !", shard_id);
 
-                                // Si des clients s'étaient connectés AVANT la Shard, on les abonne maintenant !
-                                let connected_clients: Vec<u32> = state.client_to_conn.keys().copied().collect();
-                                for client_id in connected_clients {
-                                    state.routing_table.subscribe(client_id, topic);
-                                    warn!("🛠️ [DEBUG] Auto-abonnement rétroactif du Client {} à la Shard globale.", client_id);
-                                }
+                            let connected_clients: Vec<u32> = state.client_to_conn.keys().copied().collect();
+                            for client_id in connected_clients {
+                                state.routing_table.subscribe(client_id, shard_id);
                             }
-                            // =====================================
                         }
                     } else {
                         state.conn_to_client.insert(connection, id);
                         state.client_to_conn.insert(id, connection);
-                        info!("👤 Client {} authentifié sur le Broker.", id);
+                        info!("👤 Client {} authentifié.", id);
 
-                        // === 🛠️ DEBUG MOCK SPATIAL SERVER ===
                         if let Some(default_topic) = state.debug_default_topic {
                             state.routing_table.subscribe(id, default_topic);
-                            warn!("🛠️ [DEBUG] Abonnement du Client {} à la Shard par défaut.", id);
 
-                            // NOUVEAU : On prévient la Shard qu'un joueur est arrivé !
                             if let Some(shard_conn) = state.shard_conns.get(&default_topic) {
                                 let mut notify_msg = BytesMut::with_capacity(5);
-                                notify_msg.put_u8(0x06); // Tag 0x06: ClientJoined
+                                notify_msg.put_u8(0x06); // ClientJoined
                                 notify_msg.put_u32_le(id);
                                 let _ = peer.send(shard_conn, &stream, notify_msg.freeze());
                             }
-                        } else {
-                            warn!("🛠️ [DEBUG] Le Client {} est en attente, aucune Shard n'est connectée.", id);
                         }
-                        // =====================================
                     }
                 }
 
+                // Subscribe
                 0x01 => {
-                    if data.remaining() < 36 { return; }
+                    if data.remaining() < 8 { return; } // 4 (client_id) + 4 (topic)
                     let client_id = data.get_u32_le();
-                    let mut topic = [0u8; 32];
-                    data.copy_to_slice(&mut topic);
+                    let topic = data.get_u32_le();
                     state.routing_table.subscribe(client_id, topic);
                 }
 
+                // Unsubscribe
                 0x02 => {
-                    if data.remaining() < 36 { return; }
+                    if data.remaining() < 4 { return; }
                     let client_id = data.get_u32_le();
                     state.routing_table.unsubscribe(client_id);
                 }
 
+                // Publish/Broadcast (de Shard -> vers Clients)
                 0x03 => {
-                    if data.remaining() < 34 { return; }
-                    let mut topic = [0u8; 32];
-                    data.copy_to_slice(&mut topic);
+                    if data.remaining() < 6 { return; } // 4 (topic) + 2 (len)
+                    let topic = data.get_u32_le();
                     let payload_len = data.get_u16_le() as usize;
 
                     if data.remaining() < payload_len { return; }
                     let payload = data.copy_to_bytes(payload_len);
 
-                    let mut broadcast_msg = BytesMut::with_capacity(1 + 2 + payload_len);
+                    let mut broadcast_msg = BytesMut::with_capacity(3 + payload_len);
                     broadcast_msg.put_u8(0x04);
                     broadcast_msg.put_u16_le(payload_len as u16);
                     broadcast_msg.put(payload);

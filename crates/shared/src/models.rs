@@ -3,6 +3,7 @@ use bitcode::{Decode, Encode};
 use mathtools::Vec2;
 use crate::{define_packet, define_packet_router};
 pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
+pub use crate::custom_id::CustomId;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
@@ -39,21 +40,21 @@ define_packet_router! {
 
 define_packet! {
     Subscribe(0x01) {
-        client_id: u32,
-        shard_id: u32,
+        client_id: CustomId,
+        topic_id: u32,
     }
 }
 
 define_packet! {
     Unsubscribe(0x02) {
-        client_id: u32,
-        shard_id: u32,
+        client_id: CustomId,
+        topic_id: u32,
     }
 }
 
 define_packet! {
     Publish(0x03) {
-        shard_id: u32,
+        topic_id: CustomId,
         payload: Vec<u8>,
     }
 }
@@ -66,34 +67,34 @@ define_packet!{
 
 define_packet!{
     ClientInput(0x05) {
-        client_id: u32,
+        client_id: CustomId,
         input_data: [u8; 16],
     }
 }
 
 define_packet! {
     PositionUpdate(0x10) {
-        client_id: u32,
+        client_id: CustomId,
         pos: Vec2<f32>,
     }
 }
 
 define_packet!{
     SubdivideUpdate(0x11) {
-        shard_id: u32,
+        shard_id: CustomId,
     }
 }
 
 define_packet!{
     PlayerJoinUpdate(0x12) {
-        client_id: u32,
+        client_id: CustomId,
         pos: Vec2<f32>,
     }
 }
 
 define_packet!{
     HandoffRequest(0x20) {
-        entity_id: u32,
+        entity_id: CustomId,
         pos: Vec2<f32>,
         vel: Vec2<f32>,
         state: [u8; 64],
@@ -102,19 +103,19 @@ define_packet!{
 
 define_packet!{
     HandoffAccept(0x21) {
-        entity_id: u32,
+        entity_id: CustomId,
     }
 }
 
 define_packet!{
     HandoffReject(0x22) {
-        entity_id: u32,
+        entity_id: CustomId,
     }
 }
 
 define_packet!{
     GhostUpdate(0x23) {
-        entity_id: u32,
+        entity_id: CustomId,
         pos: Vec2<f32>,
         vel: Vec2<f32>,
     }
@@ -122,13 +123,13 @@ define_packet!{
 
 define_packet!{
     HandoffComplete(0x24) {
-        entity_id: u32,
+        entity_id: CustomId,
     }
 }
 
 define_packet!{
     SpawnServer(0x30) {
-        shard_id: u32,
+        shard_id: CustomId,
         pos_min: Vec2<f32>,
         pos_max: Vec2<f32>,
     }
@@ -136,7 +137,13 @@ define_packet!{
 
 define_packet!{
     ShutdownServer(0x31) {
-        shard_id: u32,
+        shard_id: CustomId,
+    }
+}
+
+define_packet! {
+    AssignShard(0x40) {
+        shard_id: CustomId,
     }
 }
 

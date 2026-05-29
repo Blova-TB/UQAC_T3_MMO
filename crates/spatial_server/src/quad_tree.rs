@@ -1,4 +1,5 @@
 ﻿use crate::shard_id::{Quadrant, ShardId};
+use crate::client_id::ClientId;
 use ahash::{AHashMap, AHashSet};
 use mathtools::Vec2;
 
@@ -34,7 +35,7 @@ pub struct QuadTree {
     pub max_depth: u8,
     pub children: Option<Box<[QuadTree; 4]>>,
     pub shard_id: Option<ShardId>,
-    pub players: AHashMap<u32, Vec2<f32>>,
+    pub players: AHashMap<ClientId, Vec2<f32>>,
 }
 
 impl QuadTree {
@@ -96,7 +97,7 @@ impl QuadTree {
         }
     }
 
-    pub fn insert_player(&mut self, client_id: u32, pos: Vec2<f32>) -> Option<ShardId> {
+    pub fn insert_player(&mut self, client_id: ClientId, pos: Vec2<f32>) -> Option<ShardId> {
         if !self.bounds.contains(pos) {
             return None;
         }
@@ -113,9 +114,8 @@ impl QuadTree {
         self.players.insert(client_id, pos);
         self.shard_id
     }
-    
-    pub fn remove_player(&mut self, client_id: u32, shard_id: ShardId) -> Option<()> {
 
+    pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<()> {
         let mut current_node = self;
 
         for quadrant in shard_id.id_to_path() {
@@ -126,7 +126,7 @@ impl QuadTree {
         Some(())
     }
 
-    pub fn subdivide_quad_tree(&mut self) -> Vec<(u32, ShardId)> {
+    pub fn subdivide_quad_tree(&mut self) -> Vec<(ClientId, ShardId)> {
         let center = self.bounds.center();
         let min = self.bounds.min;
         let max = self.bounds.max;
@@ -158,7 +158,7 @@ impl QuadTree {
 
         let mut children = Box::new([tl, tr, bl, br]);
 
-        let mut player_moved: Vec<(u32, ShardId)> = Vec::new();
+        let mut player_moved: Vec<(ClientId, ShardId)> = Vec::new(); // <-- Utilisation de ClientId
 
         for (id, pos) in self.players.drain() {
             for child in children.iter_mut() {

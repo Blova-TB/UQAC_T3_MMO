@@ -7,9 +7,11 @@ use std::net::SocketAddr;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use shared::constants::STREAM_HEARTBEAT;
-use shared::models::Status;
+use shared::models::{ServerBinaryPacket, AssignShard, Status};
+use shared::custom_id::CustomId;
 
 use crate::player::Player;
+use crate::ServerState;
 use crate::config::ServerConfig;
 
 pub struct OrchestratorPlugin;
@@ -44,6 +46,9 @@ pub struct OrchestratorClient {
 }
 
 #[derive(Resource)]
+pub struct AssignedShard(pub CustomId);
+
+#[derive(Resource)]
 pub struct HeartbeatTimer(pub Timer);
 
 fn connect_to_orchestrator(mut commands: Commands, config: Res<ServerConfig>) {
@@ -68,15 +73,34 @@ fn connect_to_orchestrator(mut commands: Commands, config: Res<ServerConfig>) {
     println!("🚀 Client Orchestrateur initialisé vers : {}:{}", orch_ip, orch_port);
 }
 
-fn poll_orchestrator(mut commands: Commands, mut orch_client_opt: Option<ResMut<OrchestratorClient>>) {
+fn poll_orchestrator(
+    mut commands: Commands,
+    mut orch_client_opt: Option<ResMut<OrchestratorClient>>,
+    mut next_state: ResMut<NextState<ServerState>>,
+) {
     let Some(mut orch_client) = orch_client_opt else { return };
 
     loop {
         match orch_client.peer.poll() {
             Ok(Some(event)) => match event {
                 GameNetworkEvent::Connected(conn) => {
-                    println!("🔗 Connecté à l'orchestrateur ! Session ID: {:?}", conn.connection_id);
+                    println!("🔗 Connecté à l'orchestrateur ! En attente d'assignation...");
                     orch_client.connection = Some(conn);
+                    let _ = orch_client.peer.create_stream(conn, GameStreamReliability::Reliable);
+                }
+                GameNetworkEvent::Message { mut data, .. } => {
+                    if data.is_empty() { continue; }
+                    let tag = data[0];
+
+                    if tag == AssignShard::TAG {
+                        if let Some(packet) = AssignShard::try_from_bytes(data) {
+                            println!("🎯 Ordre reçu ! Ce serveur devient la Shard : {:?}", packet.shard_id);
+
+                            commands.insert_resource(AssignedShard(packet.shard_id));
+
+                            next_state.set(ServerState::Active);
+                        }
+                    }
                 }
                 GameNetworkEvent::Disconnected(_) => {
                     println!("⚠️ Connexion à l'orchestrateur perdue.");

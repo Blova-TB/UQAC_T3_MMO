@@ -1,4 +1,3 @@
-//
 mod db;
 mod docker;
 
@@ -11,9 +10,11 @@ use shared::constants::STREAM_HEARTBEAT;
 use shared::models::Status;
 use std::sync::Arc;
 use std::time::Duration;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use uuid::Uuid;
 use futures::StreamExt;
+use bytes::BufMut; // Pour forger le paquet AssignShard
+use shared::models::{SpawnServer, ServerBinaryPacket};
 
 #[derive(Deserialize)]
 pub struct HeartbeatPayload {
@@ -26,6 +27,7 @@ pub struct HeartbeatPayload {
 pub struct ServerConfig {
     pub image_name: String,
     pub max_players: usize,
+    pub server_url: String,
 }
 
 impl ServerConfig {
@@ -37,6 +39,8 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "75".to_string())
                 .parse()
                 .expect("⚠️ SERVER_MAX_PLAYER doit être un nombre entier valide"),
+            server_url: std::env::var("SERVER_URL")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
         }
     }
 }
@@ -45,34 +49,28 @@ impl ServerConfig {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_config = Arc::new(ServerConfig::from_env());
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-    let min_available_servers: usize = std::env::var("MIN_AVAILABLE_SERVERS")
-        .unwrap_or_else(|_| "2".to_string())
-        .parse()
-        .expect("MIN_AVAILABLE_SERVERS doit être un entier");
+    let min_available_servers: usize = std::env::var("MIN_AVAILABLE_SERVERS").unwrap_or(2.to_string()).parse()?;
 
     let database = Database::new(&redis_url).await?;
     println!("✅ Connecté à Redis !");
 
     let mut orchestrator_peer = GamePeer::new(QuicBackend::new());
     orchestrator_peer.listen("0.0.0.0", 4000)?;
-    println!("🎧 Orchestrateur en écoute (QUIC) sur 0.0.0.0:4000");
 
     let docker_manager = Arc::new(DockerOrchestrator::new().await?);
-
     let mut autoscale_timer = tokio::time::interval(Duration::from_secs(1));
-
     let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
-
-    println!("🛡️ L'orchestrateur (Auto-Scaling: {}) est en ligne. (CTRL+C pour quitter)", min_available_servers);
+    let mut server_streams: HashMap<Uuid, shared::network::GameStream> = HashMap::new();
 
     let mut conn = database.conn.clone();
     let _: () = redis::cmd("CONFIG").arg("SET").arg("notify-keyspace-events").arg("Ex").query_async(&mut conn).await?;
-
     let mut pubsub = database.client.get_async_pubsub().await?;
-
     pubsub.psubscribe("__keyevent@0__:expired").await?;
+
     let db_clone = database.clone();
     let docker_clone = docker_manager.clone();
+
+
 
     tokio::spawn(async move {
         let mut stream = pubsub.on_message();
@@ -80,13 +78,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(expired_key) = msg.get_payload::<String>() {
                 if expired_key.starts_with("heartbeat:") {
                     let parts: Vec<&str> = expired_key.split(':').collect();
-                    if parts.len() == 3 {
+                    if parts.len() == 2 {
                         let server_id = parts[1];
-                        let port = parts[2];
-                        println!("⏰ [TTL Redis] Le serveur {} (Port {}) n'a pas donné de nouvelles depuis 15s. Extermination...", server_id, port);
-                        let container_name = format!("game-shard-{}", port);
-                        let _ = docker_clone.remove_game_server(&container_name).await;
-                        let _ = db_clone.remove_server(server_id, port).await;
+                        println!("⏰ [TTL Redis] Le serveur {} n'a pas répondu. Destruction...", server_id);
+                        let _ = docker_clone.remove_game_server(server_id).await;
+                        let _ = db_clone.remove_server(server_id).await;
                     }
                 }
             }
@@ -102,7 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             _ = autoscale_timer.tick() => {
                 if let Ok(servers) = database.get_all_servers().await {
-
                     let available_count = servers.iter().filter(|s| {
                         (s.status == Status::Starting || s.status == Status::Empty)
                         && s.players_online < s.max_players
@@ -110,92 +105,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if available_count < min_available_servers {
                         let to_spawn = min_available_servers - available_count;
-                        println!("⚖️ [Auto-Scaler] {}/{} serveurs dispos. Démarrage de {} instance(s)...",
-                            available_count, min_available_servers, to_spawn);
+                        println!("⚖️ [Auto-Scaler] {}/{} dispos. Spawn de {} instance(s)...", available_count, min_available_servers, to_spawn);
 
-                        let mut used_ports = HashSet::new();
-                        for server in &servers {
-                            if let Some(port_str) = server.address.split(':').last() {
-                                if let Ok(p) = port_str.parse::<u16>() {
-                                    used_ports.insert(p);
-                                }
-                            }
-                        }
                         for _ in 0..to_spawn {
-                            let mut selected_port = None;
-                            for port in 4001..=5000 {
-                                if !used_ports.contains(&port) {
-                                    selected_port = Some(port);
-                                    used_ports.insert(port);
-                                    break;
+                            let server_id = Uuid::new_v4().to_string();
+                            let docker_clone = docker_manager.clone();
+                            let db_clone = database.clone();
+                            let config_clone = app_config.clone();
+
+                            tokio::spawn(async move {
+                                match docker_clone.spawn_game_server(&server_id, &config_clone.image_name, config_clone.max_players).await {
+                                    Ok(_) => {
+                                        let server_info = ServerInfo {
+                                            server_id,
+                                            shard_id: None,
+                                            players_online: 0,
+                                            max_players: config_clone.max_players,
+                                            status: Status::Starting,
+                                        };
+                                        let _ = db_clone.save_server(&server_info).await;
+                                        println!("🚀 Instance lancée avec succès");
+                                    },
+                                    Err(e) => acronym_error("Spawn", e),
                                 }
-                            }
-
-                            if let Some(port) = selected_port {
-                                let container_name = format!("game-shard-{}", port);
-
-                                let docker_clone = docker_manager.clone();
-                                let db_clone = database.clone();
-
-                                let config_clone = app_config.clone();
-
-                                tokio::spawn(async move {
-                                    match docker_clone.spawn_game_server(&container_name, &config_clone.image_name, &port.to_string(), config_clone.max_players).await {
-                                        Ok((_, server_id, shard_ip)) => {
-                                            let server_info = ServerInfo {
-                                                container_id: server_id,
-                                                address: format!("{}:{}", shard_ip, port),
-                                                players_online: 0,
-                                                max_players: config_clone.max_players,
-                                                status: Status::Starting,
-                                            };
-
-                                            let _ = db_clone.save_server(&server_info).await;
-                                            println!("🚀 Instance '{}' lancée avec succès sur l'IP interne {}:{}", container_name, shard_ip, port);
-                                        },
-                                        Err(e) => eprintln!("❌ Échec lancement {} : {}", container_name, e),
-                                    }
-                                });
-                            } else {
-                                eprintln!("🚨 [CRITIQUE] Aucun port UDP libre trouvé dans la plage 4001-5000 !");
-                                break;
-                            }
+                            });
                         }
                     }
+
                     else if available_count > min_available_servers {
                         let to_kill = available_count - min_available_servers;
-
-                        let empty_servers: Vec<_> = servers
-                            .iter()
-                            .filter(|s| s.status == Status::Empty && s.players_online == 0)
-                            .collect();
-
+                        let empty_servers: Vec<_> = servers.iter().filter(|s| s.status == Status::Empty && s.players_online == 0).collect();
                         let kill_count = std::cmp::min(to_kill, empty_servers.len());
 
-                        if kill_count > 0 {
-                            println!("⚖️ [Auto-Scaler] {}/{} serveurs dispos. Arrêt de {} instance(s) excédentaire(s)...",
-                                available_count, min_available_servers, kill_count);
+                        for server in empty_servers.into_iter().take(kill_count) {
+                            let docker_clone = docker_manager.clone();
+                            let db_clone = database.clone();
+                            let server_id = server.server_id.clone();
 
-                            for server in empty_servers.into_iter().take(kill_count) {
-                                if let Some(port_str) = server.address.split(':').last() {
-                                    let container_name = format!("game-shard-{}", port_str);
-
-                                    let docker_clone = docker_manager.clone();
-                                    let db_clone = database.clone();
-                                    let container_id = server.container_id.clone();
-                                    let port_string = port_str.to_string();
-
-                                    tokio::spawn(async move {
-                                        match docker_clone.remove_game_server(&container_name).await {
-                                            Ok(_) => {
-                                                let _ = db_clone.remove_server(&container_id, &port_string).await;
-                                                println!("🗑️ Instance excédentaire '{}' nettoyée avec succès.", container_name);
-                                            }
-                                            Err(e) => eprintln!("❌ Échec de l'arrêt de {} : {}", container_name, e),
-                                        }
-                                    });
+                            tokio::spawn(async move {
+                                if docker_clone.remove_game_server(&server_id).await.is_ok() {
+                                    let _ = db_clone.remove_server(&server_id).await;
                                 }
-                            }
+                            });
                         }
                     }
                 }
@@ -204,53 +155,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = tokio::time::sleep(Duration::from_millis(10)) => {
                 while let Ok(Some(event)) = orchestrator_peer.poll() {
                     match event {
+                        GameNetworkEvent::StreamCreated(conn, stream) => {
+                            if stream.is_reliable() {
+                                server_streams.insert(conn.connection_id, stream);
+                            }
+                        }
+                        GameNetworkEvent::Disconnected(conn) => {
+                            if let Some(server_id) = active_sessions.remove(&conn.connection_id) {
+                                let _ = docker_manager.remove_game_server(&server_id).await;
+                                let _ = database.remove_server(&server_id).await;
+                            }
+                            server_streams.remove(&conn.connection_id); // Nettoyage
+                        }
                         GameNetworkEvent::Message { connection, stream, data } => {
-                            let raw_stream_id = stream.stream_id >> 2;
+                            // Si le message provient du flux de Heartbeat, c'est un serveur de jeu qui se signale
+                            if (stream.stream_id >> 2) == STREAM_HEARTBEAT {
+                                if let Ok(json_str) = String::from_utf8(data.to_vec()) {
+                                    if let Ok(payload) = serde_json::from_str::<HeartbeatPayload>(&json_str) {
+                                        active_sessions.insert(connection.connection_id, payload.id.clone());
 
-                            match raw_stream_id {
-                                STREAM_HEARTBEAT => {
-                                    if let Ok(json_str) = String::from_utf8(data.to_vec()) {
-                                        if let Ok(payload) = serde_json::from_str::<HeartbeatPayload>(&json_str) {
+                                        if let Ok(servers) = database.get_all_servers().await {
+                                            if let Some(existing) = servers.iter().find(|s| s.server_id == payload.id) {
+                                                let updated_info = ServerInfo {
+                                                    server_id: payload.id,
+                                                    shard_id: existing.shard_id, // On conserve le ShardId s'il en a déjà un
+                                                    players_online: payload.player_count,
+                                                    max_players: payload.max_players,
+                                                    status: payload.status,
+                                                };
+                                                let _ = database.save_server(&updated_info).await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // 🚀 NOUVEAU : Si c'est un flux classique (fiable), ça vient du Spatial Server !
+                            else {
+                                if data.is_empty() { continue; }
+                                let tag = data[0];
 
-                                            active_sessions.insert(connection.connection_id, payload.id.clone());
+                                // On intercepte le Tag 0x30 (SpawnServer)
+                                if tag == SpawnServer::TAG {
+                                    if let Some(spawn_req) = SpawnServer::try_from_bytes(data) {
+                                        // Extraction de l'ID (u32 ou CustomId selon ton modèle)
+                                        let shard_raw_id: u32 = spawn_req.shard_id.into();
+                                        println!("🚀 [Orchestrator] Requête de spawn reçue du SpatialServer pour la Shard : {}", shard_raw_id);
 
-                                            if let Ok(servers) = database.get_all_servers().await {
-                                                if let Some(existing) = servers.iter().find(|s| s.container_id == payload.id) {
-                                                    let updated_info = ServerInfo {
-                                                        container_id: payload.id.clone(),
-                                                        address: existing.address.clone(),
-                                                        players_online: payload.player_count,
-                                                        max_players: payload.max_players,
-                                                        status: payload.status,
-                                                    };
-                                                    let _ = database.save_server(&updated_info).await;
+                                        if let Ok(servers) = database.get_all_servers().await {
+                                            if let Some(chosen_server) = servers.iter().find(|s| s.status == Status::Empty && s.shard_id.is_none()) {
+                                                if let Some((&conn_uuid, _)) = active_sessions.iter().find(|(_, id)| **id == chosen_server.server_id) {
+
+                                                    // 🚀 NOUVEAU : On récupère le flux fiable que le serveur a ouvert !
+                                                    if let Some(out_stream) = server_streams.get(&conn_uuid) {
+
+                                                        let mut assign_msg = bytes::BytesMut::with_capacity(5);
+                                                        assign_msg.put_u8(0x40); // Tag AssignShard
+                                                        assign_msg.put_u32_le(shard_raw_id);
+
+                                                        let target_server_conn = shared::network::GameConnection { connection_id: conn_uuid };
+
+                                                        // On utilise out_stream au lieu d'en recréer un
+                                                        if orchestrator_peer.send(&target_server_conn, out_stream, assign_msg.freeze()).is_ok() {
+                                                            println!("🎯 [Orchestrator] Shard {} assignée avec succès au serveur conteneur {}", shard_raw_id, chosen_server.server_id);
+
+                                                            let updated_info = ServerInfo {
+                                                                server_id: chosen_server.server_id.clone(),
+                                                                shard_id: Some(shard_raw_id),
+                                                                players_online: chosen_server.players_online,
+                                                                max_players: chosen_server.max_players,
+                                                                status: Status::Online,
+                                                            };
+                                                            let _ = database.save_server(&updated_info).await;
+                                                        }
+                                                    } else {
+                                                        println!("⚠️ [Orchestrator] Le serveur {} n'a pas encore de flux fiable ouvert.", chosen_server.server_id);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                _ => {}
-                            }
-                        }
-                        GameNetworkEvent::Disconnected(conn) => {
-                            println!("💔 Déconnexion QUIC détectée pour la connexion {:?}", conn.connection_id);
-
-                            if let Some(server_id) = active_sessions.remove(&conn.connection_id) {
-                                let db_clone = database.clone();
-                                let docker_clone = docker_manager.clone();
-
-                                tokio::spawn(async move {
-                                    if let Ok(servers) = db_clone.get_all_servers().await {
-                                        if let Some(server) = servers.iter().find(|s| s.container_id == server_id) {
-                                            if let Some(port_str) = server.address.split(':').last() {
-                                                let container_name = format!("game-shard-{}", port_str);
-                                                let _ = docker_clone.remove_game_server(&container_name).await;
-                                                let _ = db_clone.remove_server(&server_id, port_str).await;
-                                            }
-                                        }
-                                    }
-                                    println!("🧹 Nettoyage complet (Redis + Docker) terminé pour le serveur {}", server_id);
-                                });
                             }
                         }
                         _ => {}
@@ -259,27 +243,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    println!("🧹 [Shutdown] Nettoyage des instances de jeu en cours...");
 
     if let Ok(servers) = database.get_all_servers().await {
         for server in servers {
-            if let Some(port_str) = server.address.split(':').last() {
-                let container_name = format!("game-shard-{}", port_str);
-                println!("🔪 [Shutdown] Destruction de {}", container_name);
-
-                let _ = docker_manager.remove_game_server(&container_name).await;
-
-                let _ = database.remove_server(&server.container_id, port_str).await;
-            }
+            let _ = docker_manager.remove_game_server(&server.server_id).await;
+            let _ = database.remove_server(&server.server_id).await;
         }
     }
-
-    println!("💤 [Shutdown] Tous les serveurs de jeu ont été coupés. Extinction du réseau...");
     let _ = orchestrator_peer.shutdown();
-    println!("👋 Bye !");
-
     Ok(())
+}
 
+fn acronym_error(ctx: &str, e: anyhow::Error) {
+    eprintln!("❌ [Docker {}] : {}", ctx, e);
 }
 
 async fn wait_for_shutdown() {
