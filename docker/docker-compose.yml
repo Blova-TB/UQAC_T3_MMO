@@ -62,13 +62,14 @@ services:
       - REDIS_URL=${REDIS_URL}
       - MIN_AVAILABLE_SERVERS=${MIN_AVAILABLE_SERVERS}
       - SERVER_IMAGE=${SERVER_IMAGE}
-      - SERVER_URL=${SERVER_URL}
       - SERVER_MAX_PLAYERS=${SERVER_MAX_PLAYERS}
     depends_on:
       redis:
         condition: service_started
       server-builder:
         condition: service_completed_successfully
+      broker:
+        condition: service_healthy
     networks:
       - game-network
     volumes:
@@ -101,6 +102,24 @@ services:
     networks:
       - game-network
 
+  broker:
+    container_name: broker
+    build:
+      context: ..
+      dockerfile: docker/broker.Dockerfile
+    ports:
+      - "5000:5000/udp"
+    environment:
+      - RUST_LOG=${RUST_LOG}
+    networks:
+      - game-network
+    healthcheck:
+      test: [ "CMD-SHELL", "ss -unl | grep :5000 || exit 1" ]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
+
   spatial-server:
     build:
       context: ..
@@ -111,7 +130,7 @@ services:
       - ORCHESTRATOR_PORT=4000
 
       - BROKER_ADDR=${BROKER_ADDR:-broker}
-      - BROKER_PORT=${BROKER_PORT:-6000}
+      - BROKER_PORT=${BROKER_PORT:-5000}
 
       - RUST_LOG=${RUST_LOG:-info}
     depends_on:

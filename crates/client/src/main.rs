@@ -3,13 +3,15 @@ use bevy::state::app::StatesPlugin;
 use bevy::prelude::*;
 use tokio::runtime::Runtime;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
-use bitcode::{Decode, Encode};
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::time::Duration;
 use bevy::tasks::IoTaskPool;
 
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer};
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
+use shared::models::{ClientPacket, ServerPacket, ServerSyncMessage, PlayerPositionData};
+
+use rand::random;
 
 #[derive(Resource)]
 pub struct TokioRuntime(pub Runtime);
@@ -24,31 +26,13 @@ impl Default for TokioRuntime {
     }
 }
 
-#[derive(Encode, Decode, Debug)]
-pub enum ClientPacket {
-    Join { username: String },
-}
-
-#[derive(Encode, Decode, Debug)]
-pub enum ServerPacket {
-    Welcome { player_id: u64 },
-    RejectedFull,
-    SyncPositions(Vec<PlayerPositionData>),
-}
-
-#[derive(Encode, Decode, Debug)]
-pub struct PlayerPositionData {
-    pub entity_bits: u64,
-    pub position: [f32; 2],
-}
-
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AppState {
     #[default]
     GatekeeperLogin, // Étape 1 : Authentification HTTP Basic -> Récupération du JWT
     GatekeeperFetch, // Étape 2 : Requête HTTP GET /server avec le JWT Bearer
-    Connecting,      // Étape 3 : Handshake QUIC et envoi du Join
-    InGame,          // Étape 4 : Réception de la simulation physique
+    Connecting,      // Étape 3 : Handshake QUIC (Tag 0x00) vers le Broker
+    InGame,          // Étape 4 : Réception de la simulation physique (Tag 0x04)
 }
 
 #[derive(Resource)]
@@ -64,8 +48,10 @@ pub struct TargetServer {
 pub struct ClientState {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
-    pub joined: bool,
 }
+
+#[derive(Resource)]
+pub struct LocalPlayerId(pub u32);
 
 #[derive(Component)]
 struct LoginTask(Task<Result<String, reqwest::Error>>);
@@ -86,15 +72,15 @@ fn main() {
         .add_systems(OnEnter(AppState::GatekeeperLogin), spawn_login_request)
         .add_systems(Update, poll_login_request.run_if(in_state(AppState::GatekeeperLogin)))
 
-        // Phase 2 : Récupération de l'adresse du serveur
+        // Phase 2 : Récupération de l'adresse du serveur (Broker)
         .add_systems(OnEnter(AppState::GatekeeperFetch), spawn_gatekeeper_request)
         .add_systems(Update, poll_gatekeeper_request.run_if(in_state(AppState::GatekeeperFetch)))
 
-        // Phase 3 : Connexion QUIC
+        // Phase 3 : Connexion QUIC & Handshake
         .add_systems(OnEnter(AppState::Connecting), init_game_connection)
         .add_systems(Update, handle_connection_handshake.run_if(in_state(AppState::Connecting)))
 
-        // Phase 4 : En Jeu
+        // Phase 4 : En Jeu (Réception des Broadcasts)
         .add_systems(Update, handle_ingame_network.run_if(in_state(AppState::InGame)))
 
         .run();
@@ -195,7 +181,7 @@ fn poll_gatekeeper_request(
 
             match result {
                 Ok(address) => {
-                    println!("Client : Adresse de serveur dédiée allouée -> {}", address);
+                    println!("Client : Adresse allouée par le Gatekeeper -> {}", address);
 
                     let parts: Vec<&str> = address.split(':').collect();
                     if parts.len() == 2 {
@@ -220,7 +206,7 @@ fn poll_gatekeeper_request(
     }
 }
 
-// --- Systèmes : Phase 3 (Connexion QUIC) ---
+// --- Systèmes : Phase 3 (Connexion QUIC & Handshake) ---
 
 fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
     let backend = QuicBackend::new();
@@ -232,11 +218,11 @@ fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
     commands.insert_resource(ClientState {
         peer,
         connection: None,
-        joined: false,
     });
 }
 
 fn handle_connection_handshake(
+    mut commands: Commands,
     mut state: ResMut<ClientState>,
     mut next_state: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
@@ -244,49 +230,50 @@ fn handle_connection_handshake(
     loop {
         match state.peer.poll() {
             Ok(Some(event)) => match event {
+                // ÉTAPE 1 : La connexion brute est établie
                 GameNetworkEvent::Connected(conn) => {
-                    println!("Client : Connecté au serveur QUIC. En attente de l'ouverture du flux...");
+                    println!("Client : Connecté au Broker QUIC. Demande d'un flux fiable pour le Handshake...");
                     state.connection = Some(conn);
+
+                    // On ordonne à la librairie d'ouvrir un canal garanti (TCP-like)
+                    if let Err(e) = state.peer.create_stream(conn, GameStreamReliability::Reliable) {
+                        eprintln!("Client : Échec lors de la demande de flux fiable : {:?}", e);
+                    }
                 }
+
+                // ÉTAPE 2 : La librairie nous confirme que le canal réseau est prêt
                 GameNetworkEvent::StreamCreated(conn, stream) => {
-                    if !state.joined && stream.is_reliable() {
-                        println!("Client : Flux Fiable reçu. Envoi de la requête de connexion (Join)...");
-                        state.joined = true;
+                    if stream.is_reliable() {
+                        println!("Client : Flux fiable ouvert avec succès ! Envoi du Handshake...");
 
-                        let packet = ClientPacket::Join {
-                            username: "TestPlayer_01".to_string(),
-                        };
+                        // Arbitraire pour tes tests locaux
+                        let my_client_id: u32 = random();
+                        commands.insert_resource(LocalPlayerId(my_client_id));
 
-                        let encoded_data = bitcode::encode(&packet);
-                        if let Err(e) = state.peer.send(&conn, &stream, Bytes::from(encoded_data)) {
-                            eprintln!("Client : Échec de l'envoi du paquet: {:?}", e);
+                        // Construction du Tag 0x00 (Handshake)
+                        let mut handshake_msg = BytesMut::with_capacity(6);
+                        handshake_msg.put_u8(0x00); // Tag 0x00 : Handshake
+                        handshake_msg.put_u8(0x00); // is_shard = 0 (Joueur)
+                        handshake_msg.put_u32_le(my_client_id); // ID (Little-Endian)
+
+                        // L'envoi fonctionnera à 100% car le `stream` existe officiellement
+                        if let Err(e) = state.peer.send(&conn, &stream, handshake_msg.freeze().into()) {
+                            eprintln!("Client : Échec de l'envoi du Handshake : {:?}", e);
+                        } else {
+                            println!("Client : Handshake envoyé et garanti ! Passage en mode InGame.");
+                            next_state.set(AppState::InGame);
                         }
                     }
                 }
-                GameNetworkEvent::Message { data, .. } => {
-                    if let Ok(packet) = bitcode::decode::<ServerPacket>(&data) {
-                        match packet {
-                            ServerPacket::Welcome { player_id } => {
-                                println!("Client : Succès ! Le serveur m'a assigné l'ID : {}", player_id);
-                                next_state.set(AppState::InGame);
-                            }
-                            ServerPacket::RejectedFull => {
-                                println!("Client : ❌ Serveur plein. Redemande d'une affectation au Gatekeeper...");
-                                next_state.set(AppState::GatekeeperFetch);
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+
                 GameNetworkEvent::Disconnected(_) => {
-                    println!("Client : Déconnecté par le serveur.");
+                    println!("Client : Déconnecté par le serveur durant le handshake.");
                     exit.write(AppExit::Success);
                 }
                 GameNetworkEvent::Error { inner, .. } => {
                     eprintln!("Client : Erreur protocole : {:?}", inner);
                 }
-                _ => {}
+                _ => {} // On ignore les autres events (comme de potentiels messages reçus trop tôt)
             },
             Ok(None) => break,
             Err(e) => {
@@ -306,13 +293,29 @@ fn handle_ingame_network(
     loop {
         match session.peer.poll() {
             Ok(Some(event)) => match event {
-                GameNetworkEvent::Message { data, .. } => {
-                    if let Ok(packet) = bitcode::decode::<ServerPacket>(&data) {
-                        match packet {
-                            ServerPacket::SyncPositions(players) => {
-                                println!("--- State Sync Snapshot [{} Joueur(s) Connecté(s)] ---", players.len());
+                GameNetworkEvent::Message { mut data, .. } => {
+                    if data.is_empty() { continue; }
+
+                    let tag = data.get_u8();
+
+                    match tag {
+                        // TAG 0x04 : Broadcast venant du Broker
+                        0x04 => {
+                            if data.remaining() < 2 { continue; }
+
+                            // 1. Lire la taille du payload bitcode (en Little-Endian)
+                            let payload_len = data.get_u16_le() as usize;
+                            if data.remaining() < payload_len { continue; }
+
+                            // 2. Extraire les octets correspondants à la snapshot
+                            let inner_payload = data.copy_to_bytes(payload_len);
+
+                            // 3. Décoder la snapshot de la Shard
+                            if let Ok(sync_msg) = bitcode::decode::<ServerSyncMessage>(&inner_payload) {
+                                println!("--- State Sync Snapshot [{} Joueur(s) Visibles] ---", sync_msg.players.len());
+                                // Pour afficher les infos, tu peux dé-commenter :
                                 /*
-                                for player in players {
+                                for player in sync_msg.players {
                                     println!(
                                         " > Entity ID: {:<10} | Position Translatée: [X: {:>6.2}, Y: {:>6.2}]",
                                         player.entity_bits,
@@ -321,12 +324,14 @@ fn handle_ingame_network(
                                     );
                                 }*/
                             }
-                            _ => {}
+                        }
+                        _ => {
+                            // On ignore les tags non gérés par le client pour le moment
                         }
                     }
                 }
                 GameNetworkEvent::Disconnected(_) => {
-                    println!("Client : Session fermée par le serveur de jeu dédié.");
+                    println!("Client : Session fermée par le Broker.");
                     exit.write(AppExit::Success);
                 }
                 GameNetworkEvent::Error { inner, .. } => {

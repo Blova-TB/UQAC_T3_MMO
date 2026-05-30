@@ -2,10 +2,8 @@ use bcrypt::{DEFAULT_COST, hash, verify};
 use rocket::State;
 use rocket::http::Status;
 use rocket::serde::json::Json;
-use shared::models::Status as ServerStatus;
 use sqlx::{Pool, Postgres, Row, types::Uuid};
 
-use crate::dbGatekeeper::Database;
 use crate::{
     jwt::create_jwt,
     models::{AuthRequest, AuthenticatedUser, BasicCredentials},
@@ -65,24 +63,12 @@ pub async fn login(
     }
 }
 
-#[get("/server")]
+#[rocket::get("/server")]
 pub async fn get_server(
-    _user: AuthenticatedUser,
-    db: &State<Database>
-) -> Result<String, Status> {
-    let servers = db.get_all_servers().await.map_err(|e| {
-        eprintln!("Database error (get_all_servers): {:?}", e);
-        Status::InternalServerError
-    })?;
-
-    servers
-        .into_iter()
-        .filter(|server| {
-            (server.status == ServerStatus::Online || server.status == ServerStatus::Empty) && server.players_online < (server.max_players)
-        })
-        .max_by_key(|server| server.players_online)
-        .map(|server| server.address)
-        .ok_or(Status::NotFound)
+    broker_config: &State<crate::BrokerConfig>,
+    _user: AuthenticatedUser
+) -> String {
+    broker_config.resolved_address.clone()
 }
 
 #[get("/me")]

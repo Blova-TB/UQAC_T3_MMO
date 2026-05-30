@@ -6,6 +6,7 @@ use std::env;
 pub struct ServerConfig {
     pub id: String,
     pub max_players: usize,
+    pub broker_addr: String,
     pub orchestrator_addr: String,
 }
 
@@ -22,6 +23,7 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "100".to_string())
                 .parse::<usize>()
                 .expect("❌ ERREUR: MAX_PLAYERS doit être un entier."),
+            broker_addr: env::var("BROKER_ADDR").unwrap_or_else(|_| "127.0.0.1:5000".to_string()),
         }
     }
 }

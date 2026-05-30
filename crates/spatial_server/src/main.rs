@@ -2,9 +2,10 @@ mod quad_tree;
 mod shard_id;
 mod network;
 mod spatial_service;
+mod client_id;
 
 use bytes::Bytes;
-use shared::models::SpatialServerPacket;
+use shared::models::{SpatialServerPacket, SpawnServer, ServerBinaryPacket};
 use std::time::{Duration, Instant};
 use std::{env, io};
 use std::io::Write;
@@ -12,6 +13,8 @@ use mathtools::Vec2;
 use quad_tree::Rect;
 use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use spatial_service::SpatialService;
+use crate::shard_id::ShardId;
+use std::net::ToSocketAddrs;
 
 fn main() {
     println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");
@@ -27,34 +30,51 @@ fn main() {
         5.0 // pas encore utilisé pour le moment
     );
 
-    // Extraction stricte des variables d'environnement
-    let orchestrator_addr = env::var("ORCHESTRATOR_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let orchestrator_addr = env::var("ORCHESTRATOR_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let orchestrator_port: u16 = env::var("ORCHESTRATOR_PORT").unwrap_or_else(|_| "4000".to_string()).parse().unwrap();
 
-    let orchestrator_port: u16 = env::var("ORCHESTRATOR_PORT")
-        .unwrap_or_else(|_| "5000".to_string())
-        .parse()
-        .expect("ORCHESTRATOR_PORT doit être un nombre valide (u16)");
+    let broker_addr = env::var("BROKER_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let broker_port: u16 = env::var("BROKER_PORT").unwrap_or_else(|_| "5000".to_string()).parse().unwrap();
 
-    let broker_addr = env::var("BROKER_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    // --- RÉSOLUTION DNS ORCHESTRATEUR ---
+    let orch_full = format!("{}:{}", orchestrator_addr, orchestrator_port);
+    let orch_resolved = orch_full.to_socket_addrs()
+        .expect("❌ Erreur DNS Orchestrateur")
+        .next()
+        .expect("❌ Aucune IP trouvée pour l'Orchestrateur");
 
-    let broker_port: u16 = env::var("BROKER_PORT")
-        .unwrap_or_else(|_| "6000".to_string())
-        .parse()
-        .expect("BROKER_PORT doit être un nombre valide (u16)");
+    let resolved_orch_ip = orch_resolved.ip().to_string();
+    let resolved_orch_port = orch_resolved.port();
+
+    // --- RÉSOLUTION DNS BROKER ---
+    let broker_full = format!("{}:{}", broker_addr, broker_port);
+    let broker_resolved = broker_full.to_socket_addrs()
+        .expect("❌ Erreur DNS Broker")
+        .next()
+        .expect("❌ Aucune IP trouvée pour le Broker");
+
+    let resolved_broker_ip = broker_resolved.ip().to_string();
+    let resolved_broker_port = broker_resolved.port();
 
     println!(
-        "Démarrage SpatialServer. Cible Orchestrateur: {}:{} | Cible Broker: {}:{}",
-        orchestrator_addr, orchestrator_port, broker_addr, broker_port
+        "Démarrage SpatialServer. Cibles résolues -> Orchestrateur: {}:{} | Broker: {}:{}",
+        resolved_orch_ip, resolved_orch_port, resolved_broker_ip, resolved_broker_port
     );
 
+    // On passe les vraies adresses IP numériques au réseau !
     let mut infra_net = InfrastructureNetwork::new(
-        &orchestrator_addr, orchestrator_port,
-        &broker_addr, broker_port
+        &resolved_orch_ip, resolved_orch_port,
+        &resolved_broker_ip, resolved_broker_port
     );
 
     let target_tick_duration = Duration::from_secs_f64(1.0 / 60.0);
+
+    // 🚩 Drapeau pour s'assurer qu'on ne demande la Shard Root qu'une seule fois
+    let mut root_shard_requested = false;
+
+    // ⏱️ Chronomètre de démarrage pour laisser le temps à l'Orchestrateur de spawn ses serveurs
+    let startup_time = Instant::now();
+    let orchestrator_warmup_delay = Duration::from_secs(10); // 3 secondes de délai (ajustable)
 
     loop {
         let frame_start = Instant::now();
@@ -66,7 +86,7 @@ fn main() {
             let event_result : Option<Vec<(PeerType,Bytes)>> =
                 match event {
                     InfrastructureEvent::MessageReceived { source: PeerType::Broker, data } => {
-                        handle_broker_data(data, &mut spatial_service, &mut infra_net)
+                        handle_broker_data(data, &mut spatial_service)
                     }
                     InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
                         handle_orchestrator_data(data, &mut spatial_service)
@@ -82,6 +102,22 @@ fn main() {
             }
         }
 
+        // --- 🚀 INITIALISATION DE LA PREMIÈRE SHARD ---
+        if !root_shard_requested && startup_time.elapsed() >= orchestrator_warmup_delay {
+            let spawn_packet = SpawnServer {
+                shard_id: ShardId::ROOT.into(), // Conversion automatique en u32
+                pos_min: spatial_service.quad_tree.bounds.min,
+                pos_max: spatial_service.quad_tree.bounds.max,
+            };
+
+            // On tente d'envoyer la commande.
+            if infra_net.send_to_orchestrator(spawn_packet.to_bytes()).is_ok() {
+                println!("🌱 [SpatialServer] Requête de spawn pour la Shard ROOT envoyée après {}s de chauffe !", orchestrator_warmup_delay.as_secs());
+                root_shard_requested = true;
+            }
+        }
+        // ----------------------------------------------
+
         if !cmd.is_empty() {
             for (peer_type, data) in cmd {
                 match peer_type {
@@ -93,15 +129,12 @@ fn main() {
                     }
                 }
             }
-        }else {
-            println!("Error processing packet, no response generated.");
         }
 
         let elapsed = frame_start.elapsed();
         if elapsed < target_tick_duration {
             std::thread::sleep(target_tick_duration - elapsed);
         }
-        print!("\rTick processed in {:?} ms", elapsed.as_millis());
         if let Err(e) = io::stdout().flush() {
             eprintln!("Erreur lors du flush stdout: {}", e);
         }
@@ -109,28 +142,26 @@ fn main() {
 }
 
 fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
-    // on recoit rien ici il me semble
     print!("Error : Received data from Orchestrator: {:?} bytes", p0.len());
     None
 }
 
-fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, infra_net: &mut InfrastructureNetwork) -> Option<Vec<(PeerType,Bytes)>> {
-
+fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match SpatialServerPacket::try_from_bytes(raw_bytes) {
             Some(SpatialServerPacket::Position(update)) => {
                 spatial_service.process_update(update)
             }
-
+            Some(SpatialServerPacket::PlayerJoin(update)) => {
+                spatial_service.process_player_join(update)
+            }
             Some(SpatialServerPacket::ServerHandShake(update)) => {
                 spatial_service.process_server_handshake(update)
             }
-
             None => {
                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");
                 None
             }
-
             _ => {
                 eprintln!("Paquet reçu mais pas encore géré dans le SpatialService.");
                 None
