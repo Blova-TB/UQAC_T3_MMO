@@ -21,7 +21,10 @@ fn main() {
             max: Vec2::new(1000.0, 1000.0)
         },
         6,
-        10.0
+        10.0,
+        0.8,
+        0.5,
+        5.0 // pas encore utilisé pour le moment
     );
 
     // Extraction stricte des variables d'environnement
@@ -119,12 +122,8 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, in
                 spatial_service.process_update(update)
             }
 
-            Some(SpatialServerPacket::Subdivide(update)) => {
-                spatial_service.process_subdivide(update)
-            }
-
-            Some(SpatialServerPacket::PlayerJoin(update)) => {
-                spatial_service.process_player_join(update)
+            Some(SpatialServerPacket::ServerHandShake(update)) => {
+                spatial_service.process_server_handshake(update)
             }
 
             None => {

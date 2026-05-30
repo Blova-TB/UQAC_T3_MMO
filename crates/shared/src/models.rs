@@ -26,13 +26,15 @@ define_packet_router! {
         Broadcast(Broadcast),
         ClientInput(ClientInput),
         Position(PositionUpdate),
-        Subdivide(SubdivideUpdate),
         PlayerJoin(PlayerJoinUpdate),
         HandoffRequest(HandoffRequest),
         HandoffAccept(HandoffAccept),
         HandoffReject(HandoffReject),
         GhostUpdate(GhostUpdate),
         HandoffComplete(HandoffComplete),
+        SpawnServer(SpawnServer),
+        ShutdownServer(ShutdownServer),
+        ServerHandShake(ServerHandShake),
     }
 }
 
@@ -74,12 +76,6 @@ define_packet! {
     PositionUpdate(0x10) {
         client_id: u32,
         pos: Vec2<f32>,
-    }
-}
-
-define_packet!{
-    SubdivideUpdate(0x11) {
-        shard_id: u32,
     }
 }
 
@@ -138,3 +134,11 @@ define_packet!{
         shard_id: u32,
     }
 }
+
+define_packet!{
+    ServerHandShake(0x32) {
+        shard_id: u32,
+        occupancy: f32,
+    }
+}
+

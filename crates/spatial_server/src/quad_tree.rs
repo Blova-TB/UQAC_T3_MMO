@@ -32,9 +32,11 @@ pub struct QuadTree {
     pub bounds: Rect,
     pub depth: u8,
     pub max_depth: u8,
-    pub children: Option<Box<[QuadTree; 4]>>,
     pub shard_id: Option<ShardId>,
-    pub players: AHashMap<u32, Vec2<f32>>,
+    pub children: Option<Box<[QuadTree; 4]>>,
+    pub players: AHashMap<u32, Vec2<f32>>, // client_id -> position
+    pub server_occupation: Option<f32>,
+    pub last_subdivide_time: Option<std::time::Instant>,
 }
 
 impl QuadTree {
@@ -46,6 +48,8 @@ impl QuadTree {
             children: None,
             shard_id: Some(shard_id),
             players: AHashMap::new(),
+            server_occupation: None,
+            last_subdivide_time: None,
         }
     }
 
@@ -182,5 +186,15 @@ impl QuadTree {
     pub fn get_shard(&mut self, quad: Quadrant) -> Option<&mut QuadTree> {
         let children = self.children.as_mut()?;
         Some(&mut children[quad as usize])
+    }
+    
+    pub fn get_shard_by_id(&mut self, shard_id: ShardId) -> Option<&mut QuadTree> {
+        let mut current_node = self;
+
+        for quadrant in shard_id.id_to_path() {
+            current_node = current_node.get_shard(quadrant)?;
+        }
+
+        Some(current_node)
     }
 }
