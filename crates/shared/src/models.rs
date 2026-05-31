@@ -1,9 +1,9 @@
-﻿use serde::{Deserialize, Serialize};
+﻿pub use crate::custom_id::CustomId;
+pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
+use crate::{define_packet, define_packet_router};
 use bitcode::{Decode, Encode};
 use mathtools::Vec2;
-use crate::{define_packet, define_packet_router};
-pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
-pub use crate::custom_id::CustomId;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
@@ -39,6 +39,7 @@ define_packet_router! {
         ShutdownServer(ShutdownServer),
         ServerHandShake(ServerHandShake),
         AssignShard(AssignShard),
+        MessageQueLeSpatialEnvoieAunGameServerPourFairSpawnerUnJoueurIlPrendDoncDirectementLautoriteEtSubscribeAuInputsDuPlayer(MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer),
     }
 }
 
@@ -63,13 +64,13 @@ define_packet! {
     }
 }
 
-define_packet!{
+define_packet! {
     Broadcast(0x04) {
         payload: Vec<u8>,
     }
 }
 
-define_packet!{
+define_packet! {
     ClientInput(0x05) {
         client_id: CustomId,
         input_data: [u8; 16],
@@ -83,35 +84,35 @@ define_packet! {
     }
 }
 
-define_packet!{
+define_packet! {
     PlayerJoinUpdate(0x12) {
         client_id: CustomId,
         pos: Vec2<f32>,
     }
 }
 
-define_packet!{
+define_packet! {
     HandoffRequest(0x20) {
         shard_id: CustomId,
         entity_id: CustomId,
     }
 }
 
-define_packet!{
+define_packet! {
     HandoffAccept(0x21) {
         shard_id: CustomId,
         entity_id: CustomId,
     }
 }
 
-define_packet!{
+define_packet! {
     HandoffDrop(0x22) {
         shard_id: CustomId,
         entity_id: CustomId,
     }
 }
 
-define_packet!{
+define_packet! {
     GhostUpdate(0x23) {
         entity_id: CustomId,
         pos: Vec2<f32>,
@@ -119,16 +120,14 @@ define_packet!{
     }
 }
 
-define_packet!{
+define_packet! {
     HandoffComplete(0x24) {
         shard_id: CustomId,
         entity_id: CustomId,
     }
 }
 
-
-
-define_packet!{
+define_packet! {
     SpawnServer(0x30) {
         shard_id: CustomId,
         pos_min: Vec2<f32>,
@@ -136,30 +135,36 @@ define_packet!{
     }
 }
 
-define_packet!{
+define_packet! {
     ServerSpawned(0x31) {
         shard_id: CustomId,
     }
 }
 
-define_packet!{
+define_packet! {
     ShutdownServer(0x32) {
         shard_id: CustomId,
     }
 }
 
-define_packet!{
+define_packet! {
     ServerHandShake(0x33) {
         shard_id: CustomId,
         occupancy: f32,
     }
 }
 
-
-
 define_packet! {
     AssignShard(0x40) {
         shard_id: CustomId,
+    }
+}
+
+define_packet! {
+    MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer(0x41) {
+        shard_id: CustomId,
+        client_id: CustomId,
+        pos: Vec2<f32>,
     }
 }
 
