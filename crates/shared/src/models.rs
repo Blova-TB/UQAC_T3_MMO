@@ -161,6 +161,30 @@ define_packet! {
 }
 
 define_packet! {
+    BrokerHandshakeClient(0x08) {
+        jwt_token: Vec<u8>,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeShard(0x09) {
+        shard_id: CustomId,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeSpatial(0x0A) {
+        magic: u32,
+    }
+}
+
+define_packet! {
+    ClientLeft(0x0B) {
+        client_id: CustomId,
+    }
+}
+
+define_packet! {
     MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer(0x41) {
         shard_id: CustomId,
         client_id: CustomId,

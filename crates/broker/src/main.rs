@@ -2,10 +2,24 @@ use ahash::AHashMap;
 use bytes::{Buf, BufMut, BytesMut};
 use std::time::Duration;
 use tracing::{error, info, warn};
+use mathtools::Vec2;
 
-// Le broker n'importe QUE la couche réseau (pas les modèles de jeu !)
+use shared::models::*;
 use shared::network::protocols::QuicBackend;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer};
+
+use jsonwebtoken::{decode, DecodingKey, Validation};
+use serde::{Deserialize, Serialize};
+
+// 1. On reproduit la structure des Claims du Gatekeeper
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub custom_id: u32,
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub exp: usize,
+}
 
 // ==========================================
 //      TABLE DE ROUTAGE OPTIMISÉE
@@ -64,11 +78,13 @@ impl OptimizedRoutingTable {
 struct BrokerState {
     conn_to_client: AHashMap<GameConnection, u32>,
     client_to_conn: AHashMap<u32, GameConnection>,
-    shard_conns: AHashMap<u32, GameConnection>,
     routing_table: OptimizedRoutingTable,
 
-    // === 🛠️ DEBUG MOCK SPATIAL SERVER ===
-    debug_default_topic: Option<u32>,
+    spatial_server_conn: Option<GameConnection>,
+    spatial_server_stream: Option<shared::network::GameStream>,
+
+    shard_conns: AHashMap<u32, GameConnection>,
+    shard_streams: AHashMap<u32, shared::network::GameStream>,
 }
 
 fn main() {
@@ -100,105 +116,103 @@ fn main() {
 
 fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: &mut GamePeer) {
     match event {
-        GameNetworkEvent::Connected(conn) => {
-            info!("Nouvelle connexion anonyme établie : {:?}", conn.connection_id);
-        }
         GameNetworkEvent::Disconnected(conn) => {
             if let Some(client_id) = state.conn_to_client.remove(&conn) {
-                // NOUVEAU : On prévient la Shard AVANT de supprimer l'abonnement
+                // 🚀 On utilise le vrai paquet ClientLeft !
                 if let Some(topic) = state.routing_table.get_topic_for_client(client_id) {
                     if let Some(shard_conn) = state.shard_conns.get(&topic) {
-                        let mut notify_msg = BytesMut::with_capacity(5);
-                        notify_msg.put_u8(0x07); // Tag 0x07: ClientLeft
-                        notify_msg.put_u32_le(client_id);
-
-                        // On utilise un stream Unreliable générique car on n'a plus le flux d'origine
-                        let stream = shared::network::GameStream::new(0, shared::network::GameStreamReliability::Unreliable);
-                        let _ = peer.send(shard_conn, &stream, notify_msg.freeze());
+                        let left_pkt = ClientLeft { client_id: CustomId::from(client_id) };
+                        let stream = shared::network::GameStream::new(0, shared::network::GameStreamReliability::Reliable);
+                        let _ = peer.send(shard_conn, &stream, left_pkt.to_bytes());
                     }
                 }
-
                 state.client_to_conn.remove(&client_id);
                 state.routing_table.unsubscribe(client_id);
                 info!("👤 Client {} déconnecté et désabonné.", client_id);
             }
             state.shard_conns.retain(|_, v| v != &conn);
+
+            if Some(conn) == state.spatial_server_conn {
+                warn!("🚨 ALERTE : SPATIAL SERVER DÉCONNECTÉ ! 🚨");
+                state.spatial_server_conn = None;
+            }
         }
-        GameNetworkEvent::Message { connection, stream, mut data } => {
+
+        GameNetworkEvent::Message { connection, stream, data } => {
             if data.is_empty() { return; }
-            let tag = data.get_u8();
+            let tag = data[0]; // On lit juste le Tag sans consommer le buffer
 
             match tag {
-                // Handshake (Shard ou Client)
-                0x00 => {
-                    if data.remaining() < 5 { return; }
-                    let is_shard = data.get_u8() == 1;
-                    let id = data.get_u32_le(); // C'est notre CustomId !
+                // === HANDSHAKES ===
+                BrokerHandshakeClient::TAG => {
+                    let Some(pkt) = BrokerHandshakeClient::try_from_bytes(data) else { return; };
+                    let token_str = String::from_utf8_lossy(&pkt.jwt_token);
+                    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret_de_dev".to_string());
 
-                    if is_shard {
-                        let shard_id = id; // L'ID *EST* le topic !
-                        state.shard_conns.insert(shard_id, connection);
-                        info!("🌍 Shard enregistrée pour le ShardId {:?}", shard_id);
+                    match decode::<Claims>(
+                        token_str.as_ref(),
+                        &DecodingKey::from_secret(secret.as_bytes()),
+                        &Validation::default(),
+                    ) {
+                        Ok(token_data) => {
+                            let claims = token_data.claims;
+                            let client_id = claims.custom_id;
 
-                        // === 🛠️ DEBUG MOCK SPATIAL SERVER ===
-                        if state.debug_default_topic.is_none() {
-                            state.debug_default_topic = Some(shard_id);
-                            warn!("🛠️ [DEBUG] La Shard {:?} est la Shard Globale par défaut !", shard_id);
+                            state.conn_to_client.insert(connection.clone(), client_id);
+                            state.client_to_conn.insert(client_id, connection);
+                            info!("👤 Client {} authentifié (Pos: {}, {}).", client_id, claims.pos_x, claims.pos_y);
 
-                            let connected_clients: Vec<u32> = state.client_to_conn.keys().copied().collect();
-                            for client_id in connected_clients {
-                                state.routing_table.subscribe(client_id, shard_id);
+                            if let Some(spatial_conn) = &state.spatial_server_conn {
+                                if let Some(spatial_stream) = &state.spatial_server_stream {
+                                    let join_pkt = PlayerJoinUpdate {
+                                        client_id: CustomId::from(client_id),
+                                        pos: mathtools::Vec2::new(claims.pos_x, claims.pos_y),
+                                    };
+                                    let _ = peer.send(spatial_conn, spatial_stream, join_pkt.to_bytes());
+                                }
+                            } else {
+                                warn!("⚠️ Spatial Server hors-ligne ! Joueur {} en attente.", client_id);
                             }
                         }
-                    } else {
-                        state.conn_to_client.insert(connection, id);
-                        state.client_to_conn.insert(id, connection);
-                        info!("👤 Client {} authentifié.", id);
-
-                        if let Some(default_topic) = state.debug_default_topic {
-                            state.routing_table.subscribe(id, default_topic);
-
-                            if let Some(shard_conn) = state.shard_conns.get(&default_topic) {
-                                let mut notify_msg = BytesMut::with_capacity(5);
-                                notify_msg.put_u8(0x06); // ClientJoined
-                                notify_msg.put_u32_le(id);
-                                let _ = peer.send(shard_conn, &stream, notify_msg.freeze());
-                            }
-                        }
+                        Err(e) => warn!("⚠️ JWT invalide : {:?}", e),
                     }
                 }
 
-                // Subscribe
-                0x01 => {
-                    if data.remaining() < 8 { return; } // 4 (client_id) + 4 (topic)
-                    let client_id = data.get_u32_le();
-                    let topic = data.get_u32_le();
-                    state.routing_table.subscribe(client_id, topic);
+                BrokerHandshakeShard::TAG => {
+                    let Some(pkt) = BrokerHandshakeShard::try_from_bytes(data) else { return; };
+                    let shard_id_u32: u32 = pkt.shard_id.into();
+
+                    state.shard_conns.insert(shard_id_u32, connection);
+                    state.shard_streams.insert(shard_id_u32, stream);
+
+                    info!("🌍 Shard {} authentifiée.", shard_id_u32);
                 }
 
-                // Unsubscribe
-                0x02 => {
-                    if data.remaining() < 4 { return; }
-                    let client_id = data.get_u32_le();
-                    state.routing_table.unsubscribe(client_id);
+                BrokerHandshakeSpatial::TAG => {
+                    state.spatial_server_conn = Some(connection);
+                    state.spatial_server_stream = Some(stream);
+
+                    info!("🧠 Spatial Server authentifié !");
                 }
 
-                // Publish/Broadcast (de Shard -> vers Clients)
-                0x03 => {
-                    if data.remaining() < 6 { return; } // 4 (topic) + 2 (len)
-                    let topic = data.get_u32_le();
-                    let payload_len = data.get_u16_le() as usize;
+                // === ROUTAGE STANDARD ===
+                Subscribe::TAG => {
+                    let Some(pkt) = Subscribe::try_from_bytes(data) else { return; };
+                    state.routing_table.subscribe(pkt.client_id.into(), pkt.topic_id);
+                }
 
-                    if data.remaining() < payload_len { return; }
-                    let payload = data.copy_to_bytes(payload_len);
+                Unsubscribe::TAG => {
+                    let Some(pkt) = Unsubscribe::try_from_bytes(data) else { return; };
+                    state.routing_table.unsubscribe(pkt.client_id.into());
+                }
 
-                    let mut broadcast_msg = BytesMut::with_capacity(3 + payload_len);
-                    broadcast_msg.put_u8(0x04);
-                    broadcast_msg.put_u16_le(payload_len as u16);
-                    broadcast_msg.put(payload);
-                    let final_msg = broadcast_msg.freeze();
+                Publish::TAG => {
+                    let Some(pkt) = Publish::try_from_bytes(data) else { return; };
+                    let broadcast = Broadcast { payload: pkt.payload };
+                    let final_msg = broadcast.to_bytes();
+                    let topic_u32: u32 = pkt.topic_id.into();
 
-                    if let Some(subscribers) = state.routing_table.get_subscribers(&topic) {
+                    if let Some(subscribers) = state.routing_table.get_subscribers(&topic_u32) {
                         for client_id in subscribers {
                             if let Some(client_conn) = state.client_to_conn.get(client_id) {
                                 let _ = peer.send(client_conn, &stream, final_msg.clone());
@@ -207,22 +221,30 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     }
                 }
 
-                0x05 => {
-                    if data.remaining() < 20 { return; }
-
-                    let Some(client_id) = state.conn_to_client.get(&connection) else { return };
-                    let Some(topic) = state.routing_table.get_topic_for_client(*client_id) else { return };
-                    let Some(shard_conn) = state.shard_conns.get(&topic) else { return };
-
-                    let mut forward_msg = BytesMut::with_capacity(21);
-                    forward_msg.put_u8(0x05);
-                    forward_msg.put_u32_le(*client_id);
-                    forward_msg.put(data.copy_to_bytes(16));
-
-                    let _ = peer.send(shard_conn, &stream, forward_msg.freeze());
+                ClientInput::TAG => {
+                    let Some(pkt) = ClientInput::try_from_bytes(data.clone()) else { return; };
+                    let client_id: u32 = pkt.client_id.into();
+                    if let Some(topic) = state.routing_table.get_topic_for_client(client_id) {
+                        if let Some(shard_conn) = state.shard_conns.get(&topic) {
+                            // On fait suivre la trame brute directement (Zero-copy)
+                            let _ = peer.send(shard_conn, &stream, data);
+                        }
+                    }
                 }
 
-                _ => warn!("Tag non reconnu ignoré : 0x{:02X}", tag),
+                // 🚀 L'ORDRE D'APPARITION DU SPATIAL SERVEUR VERS LA SHARD
+                MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer::TAG => {
+                    let Some(pkt) = MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer::try_from_bytes(data.clone()) else { return; };
+                    let shard_id: u32 = pkt.shard_id.into();
+
+                    if let Some(shard_conn) = state.shard_conns.get(&shard_id) {
+                        if let Some(shard_stream) = &state.shard_streams.get(&shard_id) {
+                            let _ = peer.send(shard_conn, &shard_stream, data);
+                        }
+                    }
+                }
+
+                _ => warn!("Tag non reconnu : 0x{:02X}", tag),
             }
         }
         _ => {}
