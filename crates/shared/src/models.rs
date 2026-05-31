@@ -21,23 +21,23 @@ pub enum Status {
 // et il doit être le dernier champ de la structure.
 
 define_packet_router! {
-    pub enum SpatialServerPacket {
+    pub enum CustomServerPacket {
         Subscribe(Subscribe),
         Unsubscribe(Unsubscribe),
         Publish(Publish),
         Broadcast(Broadcast),
         ClientInput(ClientInput),
         PositionUpdate(PositionUpdate),
-        PlayerJoin(PlayerJoinUpdate),
+        PlayerJoinUpdate(PlayerJoinUpdate),
         HandoffRequest(HandoffRequest),
         HandoffAccept(HandoffAccept),
-        HandoffReject(HandoffDrop),
+        HandoffDrop(HandoffDrop),
         GhostUpdate(GhostUpdate),
         HandoffComplete(HandoffComplete),
         SpawnServer(SpawnServer),
         ServerSpawned(ServerSpawned),
         ShutdownServer(ShutdownServer),
-        ServerHandShake(ServerHandShake),
+        ServerHealthCheck(ServerHealthCheck),
         AssignShard(AssignShard),
         SpawnPlayerShard(SpawnPlayerShard),
     }
@@ -148,9 +148,9 @@ define_packet! {
 }
 
 define_packet! {
-    ServerHandShake(0x33) {
+    ServerHealthCheck(0x33) {
         shard_id: CustomId,
-        occupancy: f32,
+        occupancy: u8,
     }
 }
 

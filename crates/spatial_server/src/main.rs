@@ -5,7 +5,7 @@ mod spatial_service;
 mod client_id;
 
 use bytes::Bytes;
-use shared::models::{SpatialServerPacket, SpawnServer, ServerBinaryPacket};
+use shared::models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 use std::time::{Duration, Instant};
 use std::{env, io};
 use std::io::Write;
@@ -25,9 +25,9 @@ fn main() {
         },
         6,
         10.0,
-        0.8,
-        0.5,
-        5.0 // pas encore utilisé pour le moment
+        85,
+        50,
+        15.0
     );
 
     let orchestrator_addr = env::var("ORCHESTRATOR_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -141,35 +141,45 @@ fn main() {
     }
 }
 
-fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
-    print!("Error : Received data from Orchestrator: {:?} bytes", p0.len());
-    None
+fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
+    let cmd : Option<Vec<(PeerType,Bytes)>> =
+        match CustomServerPacket::try_from_bytes(raw_bytes) {
+            Some(CustomServerPacket::ServerSpawned(update)) => {
+                spatial_service.process_server_spawned(update)
+            }
+            None => {
+                eprintln!("Paquet binaire invalide ou Tag inconnu reçu de l'Orchestrateur.");
+                None
+            }
+            _ => {
+                eprintln!("Paquet reçu de l'Orchestrateur mais pas encore géré dans le SpatialService.");
+                None
+            }
+        };
+    cmd
 }
 
 fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
-        match SpatialServerPacket::try_from_bytes(raw_bytes) {
-            Some(SpatialServerPacket::PositionUpdate(update)) => {
+        match CustomServerPacket::try_from_bytes(raw_bytes) {
+            Some(CustomServerPacket::PositionUpdate(update)) => {
                 spatial_service.process_position_update(update)
             }
-            Some(SpatialServerPacket::HandoffAccept(update)) => {
+            Some(CustomServerPacket::HandoffAccept(update)) => {
                 spatial_service.process_handoff_accept(update)
             }
-            Some(SpatialServerPacket::PlayerJoin(update)) => {
+            Some(CustomServerPacket::PlayerJoinUpdate(update)) => {
                 spatial_service.process_player_join(update)
             }
-            Some(SpatialServerPacket::ServerHandShake(update)) => {
-                spatial_service.process_server_handshake(update)
-            }
-            Some(SpatialServerPacket::ServerSpawned(update)) => {
-                spatial_service.process_server_spawned(update)
+            Some(CustomServerPacket::ServerHealthCheck(update)) => {
+                spatial_service.process_server_health_check(update)
             }
             None => {
-                eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");
+                eprintln!("Paquet binaire invalide ou Tag inconnu reçu du Broker.");
                 None
             }
             _ => {
-                eprintln!("Paquet reçu mais pas encore géré dans le SpatialService.");
+                eprintln!("Paquet reçu du Broker mais pas encore géré dans le SpatialService.");
                 None
             }
         };
