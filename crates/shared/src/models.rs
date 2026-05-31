@@ -27,7 +27,7 @@ define_packet_router! {
         Publish(Publish),
         Broadcast(Broadcast),
         ClientInput(ClientInput),
-        Position(PositionUpdate),
+        PositionUpdate(PositionUpdate),
         PlayerJoin(PlayerJoinUpdate),
         HandoffRequest(HandoffRequest),
         HandoffAccept(HandoffAccept),
@@ -35,6 +35,7 @@ define_packet_router! {
         GhostUpdate(GhostUpdate),
         HandoffComplete(HandoffComplete),
         SpawnServer(SpawnServer),
+        ServerSpawned(ServerSpawned),
         ShutdownServer(ShutdownServer),
         ServerHandShake(ServerHandShake),
         AssignShard(AssignShard),
@@ -125,6 +126,8 @@ define_packet!{
     }
 }
 
+
+
 define_packet!{
     SpawnServer(0x30) {
         shard_id: CustomId,
@@ -134,13 +137,19 @@ define_packet!{
 }
 
 define_packet!{
-    ShutdownServer(0x31) {
+    ServerSpawned(0x31) {
         shard_id: CustomId,
     }
 }
 
 define_packet!{
-    ServerHandShake(0x32) {
+    ShutdownServer(0x32) {
+        shard_id: CustomId,
+    }
+}
+
+define_packet!{
+    ServerHandShake(0x33) {
         shard_id: CustomId,
         occupancy: f32,
     }

@@ -149,14 +149,20 @@ fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) -> Option<Vec<(P
 fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match SpatialServerPacket::try_from_bytes(raw_bytes) {
-            Some(SpatialServerPacket::Position(update)) => {
-                spatial_service.process_update(update)
+            Some(SpatialServerPacket::PositionUpdate(update)) => {
+                spatial_service.process_position_update(update)
+            }
+            Some(SpatialServerPacket::HandoffAccept(update)) => {
+                spatial_service.process_handoff_accept(update)
             }
             Some(SpatialServerPacket::PlayerJoin(update)) => {
                 spatial_service.process_player_join(update)
             }
             Some(SpatialServerPacket::ServerHandShake(update)) => {
                 spatial_service.process_server_handshake(update)
+            }
+            Some(SpatialServerPacket::ServerSpawned(update)) => {
+                spatial_service.process_server_spawned(update)
             }
             None => {
                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");

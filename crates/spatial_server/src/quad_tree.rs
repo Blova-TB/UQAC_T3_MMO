@@ -123,14 +123,14 @@ impl QuadTree {
         let mut current_node = self;
 
         for quadrant in shard_id.id_to_path() {
-            current_node = current_node.get_shard(quadrant)?;
+            current_node = current_node.get_shard_mut(quadrant)?;
         };
 
         current_node.players.remove(&client_id)?;
         Some(())
     }
 
-    pub fn subdivide_quad_tree(&mut self) -> Vec<(ClientId, ShardId)> {
+    pub fn subdivide_quad_tree(&mut self) -> Vec<(ClientId, ShardId, Vec2<f32>)> {
         let center = self.bounds.center();
         let min = self.bounds.min;
         let max = self.bounds.max;
@@ -162,14 +162,14 @@ impl QuadTree {
 
         let mut children = Box::new([tl, tr, bl, br]);
 
-        let mut player_moved: Vec<(ClientId, ShardId)> = Vec::new(); // <-- Utilisation de ClientId
+        let mut player_moved: Vec<(ClientId, ShardId, Vec2<f32>)> = Vec::new(); // <-- Utilisation de ClientId
 
         for (id, pos) in self.players.drain() {
             for child in children.iter_mut() {
                 if child.bounds.contains(pos) {
                     child.players.insert(id, pos);
                     if let Some(tiprout) = child.shard_id {
-                        player_moved.push((id, tiprout));
+                        player_moved.push((id, tiprout, pos));
                     }
                     break;
                 }
@@ -183,12 +183,27 @@ impl QuadTree {
         player_moved
     }
 
-    pub fn get_shard(&mut self, quad: Quadrant) -> Option<&mut QuadTree> {
+    pub fn get_shard_mut(&mut self, quad: Quadrant) -> Option<&mut QuadTree> {
         let children = self.children.as_mut()?;
         Some(&mut children[quad as usize])
     }
+    
+    pub fn get_shard(&self, quad: Quadrant) -> Option<&QuadTree> {
+        let children = self.children.as_ref()?;
+        Some(&children[quad as usize])
+    }
 
-    pub fn get_shard_by_id(&mut self, shard_id: ShardId) -> Option<&mut QuadTree> {
+    pub fn get_shard_by_id_mut(&mut self, shard_id: ShardId) -> Option<&mut QuadTree> {
+        let mut current_node = self;
+
+        for quadrant in shard_id.id_to_path() {
+            current_node = current_node.get_shard_mut(quadrant)?;
+        }
+
+        Some(current_node)
+    }
+    
+    pub fn get_shard_by_id(&self, shard_id: ShardId) -> Option<&QuadTree> {
         let mut current_node = self;
 
         for quadrant in shard_id.id_to_path() {
