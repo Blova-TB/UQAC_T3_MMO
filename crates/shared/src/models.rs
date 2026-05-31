@@ -37,7 +37,7 @@ define_packet_router! {
         SpawnServer(SpawnServer),
         ServerSpawned(ServerSpawned),
         ShutdownServer(ShutdownServer),
-        ServerHandShake(ServerHandShake),
+        ServerHandShake(ServerHealthCheck),
         AssignShard(AssignShard),
         MessageQueLeSpatialEnvoieAunGameServerPourFairSpawnerUnJoueurIlPrendDoncDirectementLautoriteEtSubscribeAuInputsDuPlayer(MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer),
     }
@@ -148,9 +148,9 @@ define_packet! {
 }
 
 define_packet! {
-    ServerHandShake(0x33) {
+    ServerHealthCheck(0x33) {
         shard_id: CustomId,
-        occupancy: f32,
+        occupancy: u8,
     }
 }
 

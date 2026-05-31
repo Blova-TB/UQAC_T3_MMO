@@ -36,7 +36,7 @@ pub struct QuadTree {
     pub shard_id: Option<ShardId>,
     pub children: Option<Box<[QuadTree; 4]>>,
     pub players: AHashMap<ClientId, Vec2<f32>>, // client_id -> position
-    pub server_occupation: Option<f32>,
+    pub server_occupation: Option<u8>,
     pub last_subdivide_time: Option<std::time::Instant>,
 }
 
@@ -243,6 +243,14 @@ impl QuadTree {
                 .collect()
         } else {
             Vec::new()
+        }
+    }
+
+    pub fn get_occupation_somme(&self) -> u32 {
+        if let Some(children) = &self.children {
+            children.iter().map(|child| child.get_occupation_somme()).sum()
+        } else {
+            self.server_occupation.unwrap_or(100) as u32
         }
     }
 }

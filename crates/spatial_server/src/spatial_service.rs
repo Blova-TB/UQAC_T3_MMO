@@ -8,7 +8,7 @@ use mathtools::Vec2;
 use shared::models::{
     HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest,
     MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer,
-    PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHandShake, ServerSpawned,
+    PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHealthCheck, ServerSpawned,
     SpawnServer,
 };
 
@@ -18,9 +18,10 @@ pub struct SpatialService {
     pub ghost_client: AHashMap<ShardId, Vec<ClientId>>, // shard_id -> client_id: is replicate in ghost on this serv ? (if exist alors le shard est pret à recevoir l'autorité)
     pub client_waiting_for_crossing: AHashMap<ClientId, ShardId>, // client_id -> (shard_id) : client pas encore repliqué en ghost mais qui a deja cross.
     pub shard_waiting_for_subdivide: AHashMap<ShardId, Vec<(ShardId, bool)>>, // shard_id : shard qui a demandé une subdivision et qui attend que tous les clients soient en ghost pour subdiviser
+    pub shard_waiting_for_merge: AHashSet<ShardId>,
     pub margin: f32,
-    pub occupation_to_subdivide: f32,
-    pub occupation_to_merge: f32,
+    pub occupation_to_subdivide: u8,
+    pub occupation_to_merge: u8,
     pub time_for_merge_after_subdivide: f32,
 }
 
@@ -29,8 +30,8 @@ impl SpatialService {
         bounds: Rect,
         max_depth: u8,
         margin: f32,
-        occupation_to_subdivide: f32,
-        occupation_to_merge: f32,
+        occupation_to_subdivide: u8,
+        occupation_to_merge: u8,
         time_for_merge_after_subdivide: f32,
     ) -> Self {
         if max_depth > ShardId::MAX_DEPTH {
@@ -46,6 +47,7 @@ impl SpatialService {
             ghost_client: AHashMap::new(),
             client_waiting_for_crossing: AHashMap::new(),
             shard_waiting_for_subdivide: AHashMap::new(),
+            shard_waiting_for_merge: AHashSet::new(),
             margin,
             occupation_to_subdivide,
             occupation_to_merge,
@@ -116,8 +118,6 @@ impl SpatialService {
                 "error : ANCIEN SHARD INEXISTANT dans le process_update ????? (client_id: {:?}, old_shard_id: {:?})",
                 client_id, old_shard_id
             );
-            // todo:
-            // probablement un cas où le joueur etait dans une shard qui a été subdivisé ou fusionné en meme temps qu'il a change de shard.
             return None;
         }
 
@@ -224,9 +224,9 @@ impl SpatialService {
         None
     }
 
-    pub fn process_server_handshake(
+    pub fn process_server_health_check(
         &mut self,
-        update_data: ServerHandShake,
+        update_data: ServerHealthCheck,
     ) -> Option<Vec<(PeerType, Bytes)>> {
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
 
@@ -243,9 +243,23 @@ impl SpatialService {
                 return None;
             }
             self.subdivide_request(shard_id);
-        } else {
-            //TODO
-            // current_node = self.quad_tree.get_shard_by_id_mut(shard_id.get_parent_shard_id());
+        } else if (shard_id != ShardId::ROOT) && update_data.occupancy < self.occupation_to_merge {
+            let Some(parent_shard_id_opt) = shard_id.get_parent_shard_id() else {
+                println!(
+                    "WHHHAAATT YOU ARE THE ROOT SHARD ??? SO COOOOL !!! but ... no merge for u (process_server_health_check)"
+                );
+                return None;
+            };
+
+            if let Some(parent_node) = self.quad_tree.get_shard_by_id_mut(parent_shard_id_opt) {
+                if parent_node.get_occupation_somme() < self.occupation_to_merge as u32 {
+                    if parent_node.last_subdivide_time.map_or(true, |time| {
+                        time.elapsed().as_secs_f32() > self.time_for_merge_after_subdivide
+                    }) {
+                        self.merge_request(parent_shard_id_opt);
+                    }
+                }
+            }
         }
 
         None
@@ -257,14 +271,9 @@ impl SpatialService {
     ) -> Option<Vec<(PeerType, Bytes)>> {
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
 
-        let Some(parent_shard_id) = shard_id.get_parent_shard_id() else {
-            println!(
-                "WHHHAAATT YOU ARE THE ROOT SHARD ??? SO COOOOL !!! but ... no (Error : process_server_spawned)"
-            );
-            return None;
-        };
-
-        if let Some(children) = self.shard_waiting_for_subdivide.get_mut(&parent_shard_id) {
+        if let Some(parent_shard_id) = shard_id.get_parent_shard_id()
+            && let Some(children) = self.shard_waiting_for_subdivide.get_mut(&parent_shard_id)
+        {
             if let Some(child) = children.iter_mut().find(|(id, _)| *id == shard_id) {
                 child.1 = true;
             } else {
@@ -280,10 +289,13 @@ impl SpatialService {
 
                 self.subdivide_node(parent_shard_id);
             }
+        } else if let Some(_) = self.shard_waiting_for_merge.get(&shard_id) {
+            self.shard_waiting_for_merge.remove(&shard_id);
+            self.merge_node(shard_id);
         } else {
             println!(
-                "error : parent_shard_id {:?} not found in waiting_for_subdivide (process_server_spawned)",
-                parent_shard_id
+                "error : shard_id {:?} not found in any waiting list (process_server_spawned)",
+                shard_id
             );
         }
 
@@ -381,6 +393,24 @@ impl SpatialService {
         Some(outgoing_packets)
     }
 
+    pub fn merge_request(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
+
+        let current_node = self.quad_tree.get_shard_by_id_mut(shard_id)?;
+
+        self.shard_waiting_for_merge.insert(shard_id);
+
+        let spawn_server = SpawnServer {
+            shard_id: shard_id.into(),
+            pos_max: current_node.bounds.max,
+            pos_min: current_node.bounds.min,
+        };
+
+        outgoing_packets.push((PeerType::Orchestrator, spawn_server.to_bytes()));
+
+        Some(outgoing_packets)
+    }
+
     pub fn merge_node(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
@@ -407,7 +437,6 @@ impl SpatialService {
 
         Some(outgoing_packets)
     }
-
 }
 
 pub fn fast_handoff_req(client_id: ClientId, new_shard_id: ShardId) -> (PeerType, Bytes) {
