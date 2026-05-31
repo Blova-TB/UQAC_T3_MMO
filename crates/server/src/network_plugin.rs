@@ -1,60 +1,53 @@
-﻿use std::collections::HashMap;
-use std::env;
-use bevy::prelude::*;
+﻿use bevy::prelude::*;
 use bitcode::{Decode, Encode};
-use bytes::Bytes;
-use uuid::Uuid;
+use bytes::{Buf, BufMut, BytesMut};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+use crate::{ServerState, orchestrator_plugin::AssignedShard};
+
 use shared::constants::STREAM_PHYSICS;
 use crate::config::ServerConfig;
-
-// Assure-toi que ces imports correspondent à l'arborescence de ton projet
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use crate::player::Player;
 
+use shared::custom_id::{CustomId, IdType};
+
 pub struct NetworkServerPlugin;
+
+use std::collections::HashMap;
+use rand::{random, Rng};
+
+#[derive(Resource, Default)]
+pub struct ClientEntities(pub HashMap<u32, Entity>);
 
 impl Plugin for NetworkServerPlugin {
     fn build(&self, app: &mut App) {
         app
-            .init_resource::<PlayerRegistry>()
             .init_resource::<NetworkEncoder>()
-            // On initialise uniquement l'écoute pour les joueurs
-            .add_systems(Startup, bind_server_socket)
-            // On traite les paquets joueurs et on envoie les positions
+            .init_resource::<ClientEntities>()
+            .add_systems(OnEnter(ServerState::Active), connect_to_broker)
             .add_systems(Update, (
-                receive_packets,
-                broadcast_positions,
-            ).chain());
+                poll_broker,
+                publish_positions_to_broker,
+            ).chain().run_if(in_state(ServerState::Active)));
     }
 }
-
-// --- Ressources ---
 
 #[derive(Resource, Default)]
 pub struct NetworkEncoder {
     pub buffer: bitcode::Buffer,
 }
 
-#[derive(Resource, Default)]
-pub struct PlayerRegistry {
-    pub players: HashMap<GameConnection, PlayerInfo>,
-    pub next_id: u64,
-}
-
-pub struct PlayerInfo {
-    pub id: u64,
-    pub username: String,
-    pub entity: Entity,
-}
-
 #[derive(Resource)]
-pub struct NetworkState {
+pub struct BrokerConnection {
     pub peer: GamePeer,
+    pub connection: Option<GameConnection>,
+    pub topic: u32,
 }
 
-// --- Protocoles (Packets) ---
-
+// ⚠️ N'oublie pas de supprimer ces structs locales une fois que tu auras
+// complètement migré vers shared::models::ServerSyncMessage comme on l'a vu !
 #[derive(Encode, Decode)]
 pub struct ServerSyncMessage {
     pub players: Vec<PlayerPositionData>,
@@ -66,139 +59,137 @@ pub struct PlayerPositionData {
     pub position: [f32; 2],
 }
 
-#[derive(Encode, Decode)]
-pub enum ClientPacket {
-    Join { username: String },
-}
+fn connect_to_broker(
+    mut commands: Commands,
+    config: Res<ServerConfig>,
+    assigned_shard: Res<AssignedShard>, // <-- La ShardId fournie par l'Orchestrateur
+) {
+    let peer = GamePeer::new(QuicBackend::new());
 
-#[derive(Encode, Decode)]
-pub enum ServerPacket {
-    Welcome { player_id: u64 },
-    RejectedFull,
-    SyncPositions(Vec<PlayerPositionData>),
-}
+    let addr: std::net::SocketAddr = config.broker_addr.parse()
+        .expect("❌ BROKER_ADDR invalide");
 
-// --- Systèmes ---
-
-/// Initialise l'écouteur QUIC pour accepter les connexions des joueurs
-fn bind_server_socket(mut commands: Commands, config: Res<ServerConfig>) {
-    let port: u16 = std::env::var("GAME_PORT")
-        .unwrap_or_else(|_| "4000".to_string())
-        .parse()
-        .expect("GAME_PORT doit être un nombre");
-    let server_backend = QuicBackend::new();
-    let server_peer = GamePeer::new(server_backend);
-
-    server_peer.listen("0.0.0.0", port).unwrap_or_else(|e| {
-        panic!("Échec du bind du Game Socket sur le port {}: {:?}", port, e);
+    peer.connect(&addr.ip().to_string(), addr.port()).unwrap_or_else(|e| {
+        panic!("Échec de connexion au Broker sur {}: {:?}", config.broker_addr, e);
     });
 
-    commands.insert_resource(NetworkState { peer: server_peer });
+    let shard_id_u32 = assigned_shard.0.as_u32();
 
-    println!(
-        "🎮 Serveur Joueurs en ligne. Écoute UDP(QUIC) sur 0.0.0.0:{}.",port,
-    );
+    commands.insert_resource(BrokerConnection {
+        peer,
+        connection: None,
+        topic: shard_id_u32,
+    });
+
+    println!("🔗 Shard assignée (ID: {}) tente de se connecter au Broker.", shard_id_u32);
 }
 
-/// Écoute et traite tous les messages en provenance des joueurs
-fn receive_packets(
-    mut commands: Commands,
-    mut network: ResMut<NetworkState>,
-    mut registry: ResMut<PlayerRegistry>,
+fn poll_broker(
+    mut broker: ResMut<BrokerConnection>,
     config: Res<ServerConfig>,
+    mut commands: Commands,
+    mut client_entities: ResMut<ClientEntities>,
 ) {
     loop {
-        match network.peer.poll() {
+        match broker.peer.poll() {
             Ok(Some(event)) => match event {
+                // ÉTAPE 1 : La connexion brute est établie
                 GameNetworkEvent::Connected(conn) => {
-                    println!("👤 Nouveau joueur connecté : {:?}", conn.connection_id);
-                    // On demande la création d'un flux fiable pour les commandes critiques
-                    let _ = network.peer.create_stream(conn, GameStreamReliability::Reliable);
-                }
-                GameNetworkEvent::Disconnected(conn) => {
-                    println!("👋 Joueur déconnecté : {:?}", conn.connection_id);
-                    if let Some(session) = registry.players.remove(&conn) {
-                        commands.entity(session.entity).despawn();
+                    println!("✅ Connecté au Broker avec succès ! Demande de flux fiable pour Handshake...");
+                    broker.connection = Some(conn);
+
+                    // On ordonne à la librairie d'ouvrir un canal garanti
+                    if let Err(e) = broker.peer.create_stream(conn, GameStreamReliability::Reliable) {
+                        eprintln!("❌ Échec lors de la demande de flux fiable : {:?}", e);
                     }
                 }
-                GameNetworkEvent::Message { connection, stream, data } => {
-                    if let Ok(packet) = bitcode::decode::<ClientPacket>(&data) {
-                        match packet {
-                            ClientPacket::Join { username } => {
-                                if registry.players.contains_key(&connection) {
-                                    println!("⚠️ Le client {:?} a tenté un double Join.", connection.connection_id);
-                                    continue;
-                                }
 
-                                if registry.players.len() >= config.max_players {
-                                    let reject = bitcode::encode(&ServerPacket::RejectedFull);
-                                    println!("⚠️ Le client {:?} a été rejeté, server full.", connection.connection_id);
-                                    let _ = network.peer.send(&connection, &stream, Bytes::from(reject));
-                                    continue;
-                                }
+                // ÉTAPE 2 : Le canal réseau est prêt, on envoie l'identité
+                GameNetworkEvent::StreamCreated(conn, stream) => {
+                    if stream.is_reliable() {
+                        println!("✅ Flux fiable ouvert. Envoi du Handshake de la Shard...");
 
-                                registry.next_id += 1;
-                                let new_id = registry.next_id;
+                        // Construction du Tag 0x00
+                        // 1 (Tag) + 1 (is_shard) + 4 (Topic/ShardId) = 6 octets ! (Au lieu de 38)
+                        let mut handshake_msg = BytesMut::with_capacity(6);
+                        handshake_msg.put_u8(0x00); // Tag 0x00 : Handshake
+                        handshake_msg.put_u8(0x01); // is_shard = 1 (true)
+                        handshake_msg.put_u32_le(broker.topic); // Le ShardId comme topic unique
 
-                                // Instanciation de l'entité ECS du joueur
-                                let entity = commands
-                                    .spawn(crate::player::PlayerBundle::new(
-                                        Vec2::ZERO,
-                                        100,
-                                        300.0,
-                                        15.0
-                                    ))
-                                    .id();
-
-                                // On demande la création d'un flux non-fiable pour sa physique
-                                let _ = network.peer.create_stream(connection, GameStreamReliability::Unreliable);
-
-                                registry.players.insert(
-                                    connection,
-                                    PlayerInfo {
-                                        id: new_id,
-                                        username,
-                                        entity,
-                                    },
-                                );
-
-                                let welcome = bitcode::encode(&ServerPacket::Welcome {
-                                    player_id: new_id,
-                                });
-                                let _ = network.peer.send(&connection, &stream, Bytes::from(welcome));
-
-                                println!("✅ Joueur {} a rejoint la partie !", new_id);
-                            }
+                        // Envoi sécurisé
+                        if let Err(e) = broker.peer.send(&conn, &stream, handshake_msg.freeze().into()) {
+                            eprintln!("❌ Échec de l'envoi du Handshake Shard : {:?}", e);
+                        } else {
+                            println!("🌍 Shard authentifiée auprès du Broker sur le ShardId {}", broker.topic);
                         }
                     }
                 }
-                GameNetworkEvent::Error { connection, inner } => {
-                    eprintln!("❌ Erreur réseau avec le client {:?}: {:?}", connection.connection_id, inner);
+
+                // ÉTAPE 3 : Gestion des messages venant du Broker
+                GameNetworkEvent::Message { mut data, .. } => {
+                    if data.is_empty() { return; }
+                    let tag = data.get_u8();
+
+                    match tag {
+                        // TAG 0x06 : Un client a rejoint la zone de cette Shard
+                        0x06 => {
+                            if data.remaining() < 4 { return; }
+                            let client_id = data.get_u32_le();
+
+                            // On spawn l'entité du joueur dans le monde physique de Bevy
+                            let entity = commands.spawn(crate::player::PlayerBundle::new(
+                                Vec2::ZERO, 100, 300.0, 15.0
+                            )).id();
+
+                            client_entities.0.insert(client_id, entity);
+                            println!("👤 [Shard] Joueur {} a rejoint la partie ! Entité {:?} créée.", client_id, entity);
+                        }
+
+                        // TAG 0x07 : Un client a quitté la zone (ou s'est déconnecté)
+                        0x07 => {
+                            if data.remaining() < 4 { return; }
+                            let client_id = data.get_u32_le();
+
+                            if let Some(entity) = client_entities.0.remove(&client_id) {
+                                commands.entity(entity).despawn();
+                                println!("👋 [Shard] Joueur {} a quitté la partie ! Entité {:?} détruite.", client_id, entity);
+                            }
+                        }
+
+                        // TAG 0x05 : Inputs du joueur
+                        0x05 => {
+                            // En attente d'implémentation
+                        }
+
+                        _ => {}
+                    }
                 }
+
+                // ÉTAPE 4 : Gestion des déconnexions
+                GameNetworkEvent::Disconnected(_) => {
+                    println!("❌ Déconnecté du Broker !");
+                    broker.connection = None;
+                }
+
                 _ => {}
             },
             Ok(None) => break,
             Err(e) => {
-                eprintln!("Erreur de polling GamePeer (Joueurs) : {:?}", e);
+                eprintln!("Erreur de polling Broker : {:?}", e);
                 break;
             }
         }
     }
 }
 
-/// Envoie les positions de tous les joueurs à tous les clients connectés
-fn broadcast_positions(
-    transport: Res<NetworkState>,
-    clients: Res<PlayerRegistry>,
+fn publish_positions_to_broker(
+    broker: Res<BrokerConnection>,
     mut encoder: ResMut<NetworkEncoder>,
     query: Query<(Entity, &Transform), With<Player>>,
 ) {
-    if clients.players.is_empty() {
-        return;
-    }
+    let Some(conn) = &broker.connection else { return };
 
     let mut players_data = Vec::with_capacity(query.iter().len());
-
     for (entity, transform) in query.iter() {
         players_data.push(PlayerPositionData {
             entity_bits: entity.to_bits(),
@@ -206,16 +197,25 @@ fn broadcast_positions(
         });
     }
 
-    let sync_packet = ServerPacket::SyncPositions(players_data);
-    let encoded_data = encoder.buffer.encode(&sync_packet);
-    let serialized_bytes = Bytes::copy_from_slice(encoded_data);
+    if players_data.is_empty() { return; }
 
-    // On utilise un flux statique non-fiable pour l'envoi de la physique (Méthode de tes collègues)
-    let physics_stream = GameStream::new(STREAM_PHYSICS, GameStreamReliability::Unreliable);
+    let sync_packet = ServerSyncMessage { players: players_data };
+    let inner_payload = encoder.buffer.encode(&sync_packet);
 
-    for (conn, _) in clients.players.iter() {
-        if let Err(e) = transport.peer.send(conn, &physics_stream, serialized_bytes.clone()) {
-            eprintln!("Erreur d'envoi de position vers {:?}: {:?}", conn.connection_id, e);
-        }
-    }
+    let payload_len = inner_payload.len() as u16;
+
+    // 1 (Tag) + 4 (Topic) + 2 (Len) + X (Payload)
+    let mut msg = BytesMut::with_capacity(7 + inner_payload.len());
+
+    // Tag (0x03)
+    msg.put_u8(0x03);
+    // Topic (u32 Little Endian)
+    msg.put_u32_le(broker.topic);
+    // Payload Len (u16 Little Endian)
+    msg.put_u16_le(payload_len);
+    // Payload ([u8])
+    msg.put_slice(inner_payload);
+
+    let stream = GameStream::new(STREAM_PHYSICS, GameStreamReliability::Unreliable);
+    let _ = broker.peer.send(conn, &stream, msg.freeze());
 }

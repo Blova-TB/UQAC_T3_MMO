@@ -1,6 +1,7 @@
 ﻿use std::fmt;
 use mathtools::Vec2;
 use crate::quad_tree::Rect;
+use shared::custom_id::{CustomId, IdType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Quadrant {
@@ -14,7 +15,7 @@ impl Quadrant {
     pub fn get_all() -> [Quadrant; 4] {
         [Quadrant::TopLeft, Quadrant::TopRight, Quadrant::BottomLeft, Quadrant::BottomRight]
     }
-    
+
     pub fn get_bound_from_parent(&self, parent_bounds: &Rect) -> Rect {
         let center = parent_bounds.center();
         match self {
@@ -26,60 +27,61 @@ impl Quadrant {
     }
 }
 
-
+/// ShardId est maintenant un wrapper de CustomId
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ShardId(pub u32);
+pub struct ShardId(CustomId);
 
 impl ShardId {
-
-    const SPACIAL_SIGN : u32 = 0x1000_0000;
-    const SIGN_MASK: u32 = 0xF000_0000;
+    // Plus besoin des masques de SIGN, CustomId isole déjà les 28 bits !
     const DEPTH_MASK: u32 = 0x0F00_0000;
     const QUADRANT_MASK: u32 = 0x00FF_FFFF;
     const DEPTH_SHIFT: u8 = 24;
-    pub const MAX_DEPTH: u8 = 12;
-    pub const ROOT: Self = Self(0 | Self::SPACIAL_SIGN);
+    pub const MAX_DEPTH: u8 = 12; // 24 bits dispos / 2 bits par quad = 12
+
+    // On initialise le ROOT proprement avec le constructeur de CustomId
+    pub const ROOT: Self = Self(CustomId::new_unchecked(IdType::Server, 0));
 
     #[inline]
     pub fn depth(self) -> u8 {
-        ((self.0 & Self::DEPTH_MASK) >> Self::DEPTH_SHIFT) as u8
+        // self.0.value() retourne uniquement les 28 bits, ignorant le type
+        ((self.0.value() & Self::DEPTH_MASK) >> Self::DEPTH_SHIFT) as u8
     }
 
     pub fn new_id_for_child(self, quadrant: Quadrant) -> Self {
         let current_depth = self.depth();
         assert!(
             current_depth < Self::MAX_DEPTH,
-            "Profondeur maximale du QuadTree atteinte (14)"
+            "Profondeur maximale du QuadTree atteinte ({})", Self::MAX_DEPTH
         );
 
         let new_depth = current_depth + 1;
 
-        // Màj depth
-        let mut new_id = self.0 & Self::QUADRANT_MASK;
-        new_id |= (new_depth as u32) << Self::DEPTH_SHIFT;
+        // On travaille uniquement sur l'espace des 28 bits (la valeur)
+        let mut new_val = self.0.value() & Self::QUADRANT_MASK;
+        new_val |= (new_depth as u32) << Self::DEPTH_SHIFT;
 
-        // add quadrant
+        // Ajout du quadrant
         let shift = Self::DEPTH_SHIFT - (2 * new_depth);
-        new_id |= (quadrant as u32) << shift;
+        new_val |= (quadrant as u32) << shift;
 
-        new_id |= Self::SPACIAL_SIGN;
-
-        Self(new_id)
+        // On encapsule avec la certitude que c'est un IdType::Server
+        Self(CustomId::new_unchecked(IdType::Server, new_val))
     }
 
     pub fn id_to_path(self) -> Vec<Quadrant> {
         let depth = self.depth();
         let mut result = Vec::with_capacity(depth as usize);
+        let val = self.0.value();
 
         for i in 1..=depth {
             let shift = Self::DEPTH_SHIFT - (2 * i);
-            let quad_bits = (self.0 >> shift) & 0b11;
+            let quad_bits = (val >> shift) & 0b11;
 
             let quad = match quad_bits {
                 0b00 => Quadrant::TopLeft,
                 0b01 => Quadrant::TopRight,
-                0b10 => Quadrant::BottomRight,
-                0b11 => Quadrant::BottomLeft,
+                0b10 => Quadrant::BottomLeft,  // <- Bug corrigé ici
+                0b11 => Quadrant::BottomRight, // <- Bug corrigé ici
                 _ => unreachable!(),
             };
             result.push(quad);
@@ -87,8 +89,23 @@ impl ShardId {
 
         result
     }
+    
+    pub fn get_parent_shard_id(self) -> Option<Self> {
+        let depth = self.depth();
+        if depth == 0 {
+            return None; // Le ROOT n'a pas de parent
+        }
+
+        let mut parent_val = self.0.value() & Self::QUADRANT_MASK;
+        parent_val &= !(0b11 << (Self::DEPTH_SHIFT - (2 * depth)));
+        parent_val &= !(Self::DEPTH_MASK);
+        parent_val |= ((depth - 1) as u32) << Self::DEPTH_SHIFT;
+
+        Some(Self(CustomId::new_unchecked(IdType::Server, parent_val)))
+        }
 }
 
+// L'affichage de debug reste identique, ce qui est très pratique
 impl fmt::Debug for ShardId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ShardId({:04b} ", self.depth())?;
@@ -96,21 +113,37 @@ impl fmt::Debug for ShardId {
         for quad in p {
             write!(f, "{:02b} ", quad as u8)?;
         }
-        write!(f, "[{}])", self.0)
+        write!(f, "[{}])", self.0.as_u32()) // On affiche le u32 complet
     }
 }
 
-impl From <u32> for ShardId {
-    fn from(value: u32) -> Self {
-        if(value & Self::SIGN_MASK) != Self::SPACIAL_SIGN {
-            panic!("Invalid ShardId value: {:08X}", value);
+// ==========================================
+//   CONVERSIONS SÉCURISÉES (TRY_FROM / FROM)
+// ==========================================
+
+/// Permet la conversion stricte d'un CustomId en ShardId
+impl TryFrom<CustomId> for ShardId {
+    type Error = &'static str;
+
+    fn try_from(id: CustomId) -> Result<Self, Self::Error> {
+        if id.id_type()? != IdType::Server {
+            return Err("Le CustomId fourni n'est pas du type Serveur (Shard)");
         }
-        Self(value)
+        Ok(Self(id))
     }
 }
 
-impl From <ShardId> for u32 {
+/// Transforme silencieusement un ShardId en CustomId
+/// (Utile pour le passer à tes services comme SpatialService ou le réseau)
+impl From<ShardId> for CustomId {
+    fn from(shard_id: ShardId) -> Self {
+        shard_id.0
+    }
+}
+
+/// Au cas où un module doive absolument lire un u32 brut
+impl From<ShardId> for u32 {
     fn from(value: ShardId) -> Self {
-        value.0
+        value.0.as_u32()
     }
 }

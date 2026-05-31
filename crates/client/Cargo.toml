@@ -11,3 +11,4 @@ shared = { path = "../shared" }
 reqwest = { version = "0.13", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 tokio = "1.52.3"
+rand = "0.9.4"

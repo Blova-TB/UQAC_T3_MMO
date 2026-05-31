@@ -1,4 +1,5 @@
 ﻿use crate::shard_id::{Quadrant, ShardId};
+use crate::client_id::ClientId;
 use ahash::{AHashMap, AHashSet};
 use mathtools::Vec2;
 
@@ -32,9 +33,11 @@ pub struct QuadTree {
     pub bounds: Rect,
     pub depth: u8,
     pub max_depth: u8,
-    pub children: Option<Box<[QuadTree; 4]>>,
     pub shard_id: Option<ShardId>,
-    pub players: AHashMap<u32, Vec2<f32>>,
+    pub children: Option<Box<[QuadTree; 4]>>,
+    pub players: AHashMap<ClientId, Vec2<f32>>, // client_id -> position
+    pub server_occupation: Option<u8>,
+    pub last_subdivide_time: Option<std::time::Instant>,
 }
 
 impl QuadTree {
@@ -46,6 +49,8 @@ impl QuadTree {
             children: None,
             shard_id: Some(shard_id),
             players: AHashMap::new(),
+            server_occupation: None,
+            last_subdivide_time: None,
         }
     }
 
@@ -96,7 +101,7 @@ impl QuadTree {
         }
     }
 
-    pub fn insert_player(&mut self, client_id: u32, pos: Vec2<f32>) -> Option<ShardId> {
+    pub fn insert_player(&mut self, client_id: ClientId, pos: Vec2<f32>) -> Option<ShardId> {
         if !self.bounds.contains(pos) {
             return None;
         }
@@ -113,20 +118,19 @@ impl QuadTree {
         self.players.insert(client_id, pos);
         self.shard_id
     }
-    
-    pub fn remove_player(&mut self, client_id: u32, shard_id: ShardId) -> Option<()> {
 
+    pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<()> {
         let mut current_node = self;
 
         for quadrant in shard_id.id_to_path() {
-            current_node = current_node.get_shard(quadrant)?;
+            current_node = current_node.get_shard_mut(quadrant)?;
         };
 
         current_node.players.remove(&client_id)?;
         Some(())
     }
 
-    pub fn subdivide_quad_tree(&mut self) -> Vec<(u32, ShardId)> {
+    pub fn subdivide_quad_tree(&mut self) -> Vec<(ClientId, ShardId, Vec2<f32>)> {
         let center = self.bounds.center();
         let min = self.bounds.min;
         let max = self.bounds.max;
@@ -158,14 +162,14 @@ impl QuadTree {
 
         let mut children = Box::new([tl, tr, bl, br]);
 
-        let mut player_moved: Vec<(u32, ShardId)> = Vec::new();
+        let mut player_moved: Vec<(ClientId, ShardId, Vec2<f32>)> = Vec::new(); // <-- Utilisation de ClientId
 
         for (id, pos) in self.players.drain() {
             for child in children.iter_mut() {
                 if child.bounds.contains(pos) {
                     child.players.insert(id, pos);
                     if let Some(tiprout) = child.shard_id {
-                        player_moved.push((id, tiprout));
+                        player_moved.push((id, tiprout, pos));
                     }
                     break;
                 }
@@ -179,8 +183,74 @@ impl QuadTree {
         player_moved
     }
 
-    pub fn get_shard(&mut self, quad: Quadrant) -> Option<&mut QuadTree> {
+    pub fn merge_quad_tree(&mut self, shard_id: ShardId) -> (Vec<ClientId>, AHashSet<ShardId>){
+
+        let mut player_moved= (Vec::new(), AHashSet::new());
+
+        self.get_all_player().into_iter().for_each(|(id, old_shard_id, pos)| {
+            self.players.insert(id, pos);
+            player_moved.0.push(id);
+            player_moved.1.insert(old_shard_id);
+        });
+
+        self.shard_id = Some(shard_id);
+        self.children = None;
+
+        player_moved
+    }
+
+    pub fn get_shard_mut(&mut self, quad: Quadrant) -> Option<&mut QuadTree> {
         let children = self.children.as_mut()?;
         Some(&mut children[quad as usize])
+    }
+    
+    pub fn get_shard(&self, quad: Quadrant) -> Option<&QuadTree> {
+        let children = self.children.as_ref()?;
+        Some(&children[quad as usize])
+    }
+
+    pub fn get_shard_by_id_mut(&mut self, shard_id: ShardId) -> Option<&mut QuadTree> {
+        let mut current_node = self;
+
+        for quadrant in shard_id.id_to_path() {
+            current_node = current_node.get_shard_mut(quadrant)?;
+        }
+
+        Some(current_node)
+    }
+    
+    pub fn get_shard_by_id(&self, shard_id: ShardId) -> Option<&QuadTree> {
+        let mut current_node = self;
+
+        for quadrant in shard_id.id_to_path() {
+            current_node = current_node.get_shard(quadrant)?;
+        }
+
+        Some(current_node)
+    }
+
+    pub fn get_all_player(&self) -> Vec<(ClientId, ShardId, Vec2<f32>)> {
+        if let Some(children) = &self.children {
+            let mut players = Vec::new();
+            for child in children.iter() {
+                players.extend(child.get_all_player());
+            }
+            players
+        } else if let Some(shard_id) = self.shard_id {
+            self.players
+                .iter()
+                .map(|(id, pos)| (*id, shard_id, *pos))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn get_occupation_somme(&self) -> u32 {
+        if let Some(children) = &self.children {
+            children.iter().map(|child| child.get_occupation_somme()).sum()
+        } else {
+            self.server_occupation.unwrap_or(100) as u32
+        }
     }
 }

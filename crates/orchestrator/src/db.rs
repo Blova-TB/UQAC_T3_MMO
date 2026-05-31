@@ -6,8 +6,8 @@ use anyhow::{Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerInfo {
-    pub container_id: String,
-    pub address: String,
+    pub server_id: String,
+    pub shard_id: Option<u32>,
     pub players_online: usize,
     pub max_players: usize,
     pub status: Status,
@@ -30,23 +30,20 @@ impl Database {
         let mut conn = self.conn.clone();
         let json = serde_json::to_string(server)?;
 
-        let _: () = conn.hset("servers_hash", &server.container_id, json).await?;
+        let _: () = conn.hset("servers_hash", &server.server_id, json).await?;
 
-        if let Some(port) = server.address.split(':').last() {
-            let shadow_key = format!("heartbeat:{}:{}", server.container_id, port);
-            let _: () = conn.set_ex(shadow_key, "1", 30).await?;
-        }
+        let shadow_key = format!("heartbeat:{}", server.server_id);
+        let _: () = conn.set_ex(shadow_key, "1", 15).await?;
 
         Ok(())
     }
 
-    pub async fn remove_server(&self, container_id: &str, port: &str) -> Result<()> {
+    pub async fn remove_server(&self, server_id: &str) -> Result<()> {
         let mut conn = self.conn.clone();
-        let _: () = conn.hdel("servers_hash", container_id).await?;
+        let _: () = conn.hdel("servers_hash", server_id).await?;
 
-        let shadow_key = format!("heartbeat:{}:{}", container_id, port);
+        let shadow_key = format!("heartbeat:{}", server_id);
         let _: () = conn.del(shadow_key).await?;
-
         Ok(())
     }
 
