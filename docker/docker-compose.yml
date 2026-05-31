@@ -111,6 +111,7 @@ services:
       - "5000:5000/udp"
     environment:
       - RUST_LOG=${RUST_LOG}
+      - JWT_SECRET=${JWT_SECRET}
     networks:
       - game-network
     healthcheck:

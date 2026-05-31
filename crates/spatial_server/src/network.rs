@@ -1,6 +1,7 @@
 ﻿use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use bytes::Bytes;
+use shared::models::*;
 
 pub struct InfrastructureNetwork {
     orchestrator_peer: GamePeer,
@@ -85,11 +86,16 @@ impl InfrastructureNetwork {
                     }
                 }
             }
-            GameNetworkEvent::StreamCreated(_conn, stream) => {
+            GameNetworkEvent::StreamCreated(conn, stream) => {
                 if stream.is_reliable() {
                     match peer_type {
                         PeerType::Orchestrator => self.orchestrator_reliable_stream = Some(stream),
-                        PeerType::Broker => self.broker_reliable_stream = Some(stream),
+                        PeerType::Broker => {
+                            self.broker_reliable_stream = Some(stream.clone());
+                            let handshake = BrokerHandshakeSpatial { magic: 42 };
+                            let _ = self.broker_peer.send(&conn, &stream, handshake.to_bytes());
+                            println!("🧠 [Spatial] Handshake typé envoyé au Broker !");
+                        }
                     }
                 }
             }

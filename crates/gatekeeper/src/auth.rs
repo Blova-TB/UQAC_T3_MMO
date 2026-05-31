@@ -55,6 +55,9 @@ impl<'r> FromRequest<'r> for AuthenticatedUser {
         match decode_jwt(token, secret) {
             Ok(claims) => Outcome::Success(AuthenticatedUser {
                 user_id: claims.sub,
+                custom_id: claims.custom_id,
+                pos_x: claims.pos_x,
+                pos_y: claims.pos_y,
             }),
             Err(_) => Outcome::Forward(Status::Unauthorized),
         }

@@ -9,7 +9,7 @@ use bevy::tasks::IoTaskPool;
 
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
-use shared::models::{ClientPacket, ServerPacket, ServerSyncMessage, PlayerPositionData};
+use shared::models::*;
 
 use rand::random;
 
@@ -91,8 +91,8 @@ fn main() {
 fn spawn_login_request(mut commands: Commands, rt: Res<TokioRuntime>) {
     println!("Client : Authentification auprès du Gatekeeper (POST /login)...");
 
-    let username = "test_user".to_string();
-    let password = "password123".to_string();
+    let username = std::env::var("BOT_USER").unwrap_or_else(|_| "test_user".to_string());
+    let password = std::env::var("BOT_PASS").unwrap_or_else(|_| "password123".to_string());
 
     let join_handle = rt.0.spawn(async move {
         let client = reqwest::Client::new();
@@ -180,22 +180,40 @@ fn poll_gatekeeper_request(
             commands.entity(entity).despawn();
 
             match result {
-                Ok(address) => {
-                    println!("Client : Adresse allouée par le Gatekeeper -> {}", address);
+                Ok(response_text) => {
+                    println!("Client : Réponse du Gatekeeper -> {}", response_text);
 
-                    let parts: Vec<&str> = address.split(':').collect();
-                    if parts.len() == 2 {
-                        if let Ok(port) = parts[1].parse::<u16>() {
-                            commands.insert_resource(TargetServer {
-                                ip: parts[0].to_string(),
-                                port
-                            });
-                            next_state.set(AppState::Connecting);
-                        } else {
-                            eprintln!("Erreur : Port invalide retourné par le Gatekeeper : {}", parts[1]);
+                    // 🚀 NOUVEAU : On parse le JSON renvoyé par le Gatekeeper
+                    match serde_json::from_str::<serde_json::Value>(&response_text) {
+                        Ok(json) => {
+                            // Extraction de l'adresse et du nouveau token
+                            let broker_addr = json["broker_addr"].as_str().unwrap_or("");
+                            let session_token = json["session_token"].as_str().unwrap_or("");
+
+                            let parts: Vec<&str> = broker_addr.split(':').collect();
+                            if parts.len() == 2 {
+                                if let Ok(port) = parts[1].parse::<u16>() {
+
+                                    // 1. On sauvegarde l'IP et le Port du Broker
+                                    commands.insert_resource(TargetServer {
+                                        ip: parts[0].to_string(),
+                                        port
+                                    });
+
+                                    // 2. 🚀 On remplace le Token Web par le Token de Jeu !
+                                    commands.insert_resource(GatekeeperToken(session_token.to_string()));
+
+                                    next_state.set(AppState::Connecting);
+                                } else {
+                                    eprintln!("Erreur : Port invalide retourné par le Gatekeeper : {}", parts[1]);
+                                }
+                            } else {
+                                eprintln!("Erreur : Format d'adresse réseau invalide : {}", broker_addr);
+                            }
                         }
-                    } else {
-                        eprintln!("Erreur : Format d'adresse réseau invalide : {}", address);
+                        Err(e) => {
+                            eprintln!("Erreur lors de la lecture du JSON du Gatekeeper : {:?}", e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -223,6 +241,7 @@ fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
 
 fn handle_connection_handshake(
     mut commands: Commands,
+    token: Res<GatekeeperToken>,
     mut state: ResMut<ClientState>,
     mut next_state: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
@@ -232,35 +251,25 @@ fn handle_connection_handshake(
             Ok(Some(event)) => match event {
                 // ÉTAPE 1 : La connexion brute est établie
                 GameNetworkEvent::Connected(conn) => {
-                    println!("Client : Connecté au Broker QUIC. Demande d'un flux fiable pour le Handshake...");
+                    println!("Client : Connecté au Broker QUIC. Demande d'un flux fiable...");
                     state.connection = Some(conn);
-
-                    // On ordonne à la librairie d'ouvrir un canal garanti (TCP-like)
-                    if let Err(e) = state.peer.create_stream(conn, GameStreamReliability::Reliable) {
-                        eprintln!("Client : Échec lors de la demande de flux fiable : {:?}", e);
-                    }
+                    let _ = state.peer.create_stream(conn, GameStreamReliability::Reliable);
                 }
 
                 // ÉTAPE 2 : La librairie nous confirme que le canal réseau est prêt
                 GameNetworkEvent::StreamCreated(conn, stream) => {
                     if stream.is_reliable() {
-                        println!("Client : Flux fiable ouvert avec succès ! Envoi du Handshake...");
+                        println!("Client : Flux fiable ouvert ! Envoi du JWT d'authentification...");
 
-                        // Arbitraire pour tes tests locaux
-                        let my_client_id: u32 = random();
-                        commands.insert_resource(LocalPlayerId(my_client_id));
+                        // 🚀 NOUVEAU : On utilise notre paquet typé avec le Token !
+                        let handshake = BrokerHandshakeClient {
+                            jwt_token: token.0.as_bytes().to_vec(),
+                        };
 
-                        // Construction du Tag 0x00 (Handshake)
-                        let mut handshake_msg = BytesMut::with_capacity(6);
-                        handshake_msg.put_u8(0x00); // Tag 0x00 : Handshake
-                        handshake_msg.put_u8(0x00); // is_shard = 0 (Joueur)
-                        handshake_msg.put_u32_le(my_client_id); // ID (Little-Endian)
-
-                        // L'envoi fonctionnera à 100% car le `stream` existe officiellement
-                        if let Err(e) = state.peer.send(&conn, &stream, handshake_msg.freeze().into()) {
+                        if let Err(e) = state.peer.send(&conn, &stream, handshake.to_bytes()) {
                             eprintln!("Client : Échec de l'envoi du Handshake : {:?}", e);
                         } else {
-                            println!("Client : Handshake envoyé et garanti ! Passage en mode InGame.");
+                            println!("Client : Handshake JWT envoyé et garanti ! Passage en mode InGame.");
                             next_state.set(AppState::InGame);
                         }
                     }
@@ -273,7 +282,7 @@ fn handle_connection_handshake(
                 GameNetworkEvent::Error { inner, .. } => {
                     eprintln!("Client : Erreur protocole : {:?}", inner);
                 }
-                _ => {} // On ignore les autres events (comme de potentiels messages reçus trop tôt)
+                _ => {} // On ignore les autres events
             },
             Ok(None) => break,
             Err(e) => {

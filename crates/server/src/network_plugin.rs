@@ -9,6 +9,7 @@ use shared::constants::STREAM_PHYSICS;
 use crate::config::ServerConfig;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
+use shared::models::*;
 use crate::player::Player;
 
 use shared::custom_id::{CustomId, IdType};
@@ -107,64 +108,50 @@ fn poll_broker(
                 // ÉTAPE 2 : Le canal réseau est prêt, on envoie l'identité
                 GameNetworkEvent::StreamCreated(conn, stream) => {
                     if stream.is_reliable() {
-                        println!("✅ Flux fiable ouvert. Envoi du Handshake de la Shard...");
-
-                        // Construction du Tag 0x00
-                        // 1 (Tag) + 1 (is_shard) + 4 (Topic/ShardId) = 6 octets ! (Au lieu de 38)
-                        let mut handshake_msg = BytesMut::with_capacity(6);
-                        handshake_msg.put_u8(0x00); // Tag 0x00 : Handshake
-                        handshake_msg.put_u8(0x01); // is_shard = 1 (true)
-                        handshake_msg.put_u32_le(broker.topic); // Le ShardId comme topic unique
-
-                        // Envoi sécurisé
-                        if let Err(e) = broker.peer.send(&conn, &stream, handshake_msg.freeze().into()) {
-                            eprintln!("❌ Échec de l'envoi du Handshake Shard : {:?}", e);
-                        } else {
-                            println!("🌍 Shard authentifiée auprès du Broker sur le ShardId {}", broker.topic);
-                        }
+                        let handshake = BrokerHandshakeShard {
+                            shard_id: CustomId::from(broker.topic), // broker.topic doit être de type u32/CustomId
+                        };
+                        let _ = broker.peer.send(&conn, &stream, handshake.to_bytes());
+                        println!("🌍 Shard Handshake envoyé !");
                     }
                 }
 
                 // ÉTAPE 3 : Gestion des messages venant du Broker
-                GameNetworkEvent::Message { mut data, .. } => {
+                GameNetworkEvent::Message { data, .. } => {
                     if data.is_empty() { return; }
-                    let tag = data.get_u8();
+                    let tag = data[0];
 
                     match tag {
-                        // TAG 0x06 : Un client a rejoint la zone de cette Shard
-                        0x06 => {
-                            if data.remaining() < 4 { return; }
-                            let client_id = data.get_u32_le();
+                        SpawnPlayerShard::TAG => {
+                            let Some(pkt) = SpawnPlayerShard::try_from_bytes(data) else { return; };
 
-                            // On spawn l'entité du joueur dans le monde physique de Bevy
+                            let client_id: u32 = pkt.client_id.into();
+                            let bevy_pos = Vec2::new(pkt.pos.x, pkt.pos.y);
+
                             let entity = commands.spawn(crate::player::PlayerBundle::new(
-                                Vec2::ZERO, 100, 300.0, 15.0
+                                bevy_pos,
+                                100,
+                                300.0,
+                                15.0
                             )).id();
 
                             client_entities.0.insert(client_id, entity);
-                            println!("👤 [Shard] Joueur {} a rejoint la partie ! Entité {:?} créée.", client_id, entity);
+                            println!("👤 [Shard] Autorité prise sur le Joueur {} en {:?} ! Entité {:?} créée.", client_id, bevy_pos, entity);
                         }
 
-                        // TAG 0x07 : Un client a quitté la zone (ou s'est déconnecté)
-                        0x07 => {
-                            if data.remaining() < 4 { return; }
-                            let client_id = data.get_u32_le();
+                        ClientLeft::TAG => {
+                            let Some(pkt) = ClientLeft::try_from_bytes(data) else { return; };
+                            let client_id: u32 = pkt.client_id.into();
 
                             if let Some(entity) = client_entities.0.remove(&client_id) {
                                 commands.entity(entity).despawn();
-                                println!("👋 [Shard] Joueur {} a quitté la partie ! Entité {:?} détruite.", client_id, entity);
+                                println!("👋 [Shard] Joueur {} a quitté la partie !", client_id);
                             }
-                        }
-
-                        // TAG 0x05 : Inputs du joueur
-                        0x05 => {
-                            // En attente d'implémentation
                         }
 
                         _ => {}
                     }
                 }
-
                 // ÉTAPE 4 : Gestion des déconnexions
                 GameNetworkEvent::Disconnected(_) => {
                     println!("❌ Déconnecté du Broker !");

@@ -39,20 +39,20 @@ define_packet_router! {
         ShutdownServer(ShutdownServer),
         ServerHealthCheck(ServerHealthCheck),
         AssignShard(AssignShard),
-        MessageQueLeSpatialEnvoieAunGameServerPourFairSpawnerUnJoueurIlPrendDoncDirectementLautoriteEtSubscribeAuInputsDuPlayer(MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer),
+        SpawnPlayerShard(SpawnPlayerShard),
     }
 }
 
 define_packet! {
     Subscribe(0x01) {
-        client_id: CustomId,
+        custom_id: CustomId,
         topic_id: u32,
     }
 }
 
 define_packet! {
     Unsubscribe(0x02) {
-        client_id: CustomId,
+        custom_id: CustomId,
         topic_id: u32,
     }
 }
@@ -161,7 +161,31 @@ define_packet! {
 }
 
 define_packet! {
-    MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer(0x41) {
+    BrokerHandshakeClient(0x08) {
+        jwt_token: Vec<u8>,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeShard(0x09) {
+        shard_id: CustomId,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeSpatial(0x0A) {
+        magic: u32,
+    }
+}
+
+define_packet! {
+    ClientLeft(0x0B) {
+        client_id: CustomId,
+    }
+}
+
+define_packet! {
+    SpawnPlayerShard(0x41) {
         shard_id: CustomId,
         client_id: CustomId,
         pos: Vec2<f32>,
