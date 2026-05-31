@@ -89,6 +89,20 @@ impl ShardId {
 
         result
     }
+    
+    pub fn get_parent_shard_id(self) -> Option<Self> {
+        let depth = self.depth();
+        if depth == 0 {
+            return None; // Le ROOT n'a pas de parent
+        }
+
+        let mut parent_val = self.0.value() & Self::QUADRANT_MASK;
+        parent_val &= !(0b11 << (Self::DEPTH_SHIFT - (2 * depth)));
+        parent_val &= !(Self::DEPTH_MASK);
+        parent_val |= ((depth - 1) as u32) << Self::DEPTH_SHIFT;
+
+        Some(Self(CustomId::new_unchecked(IdType::Server, parent_val)))
+        }
 }
 
 // L'affichage de debug reste identique, ce qui est très pratique

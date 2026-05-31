@@ -5,7 +5,6 @@ mod spatial_service;
 mod client_id;
 
 use bytes::Bytes;
-// Ajout de SpawnServer et ServerBinaryPacket
 use shared::models::{SpatialServerPacket, SpawnServer, ServerBinaryPacket};
 use std::time::{Duration, Instant};
 use std::{env, io};
@@ -14,20 +13,21 @@ use mathtools::Vec2;
 use quad_tree::Rect;
 use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use spatial_service::SpatialService;
-// Ajout de ShardId pour récupérer la racine
 use crate::shard_id::ShardId;
 use std::net::ToSocketAddrs;
 
 fn main() {
     println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");
-
     let mut spatial_service = SpatialService::new(
         Rect {
             min: Vec2::new(0.0, 0.0),
             max: Vec2::new(1000.0, 1000.0)
         },
         6,
-        10.0
+        10.0,
+        0.8,
+        0.5,
+        5.0 // pas encore utilisé pour le moment
     );
 
     let orchestrator_addr = env::var("ORCHESTRATOR_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -86,7 +86,7 @@ fn main() {
             let event_result : Option<Vec<(PeerType,Bytes)>> =
                 match event {
                     InfrastructureEvent::MessageReceived { source: PeerType::Broker, data } => {
-                        handle_broker_data(data, &mut spatial_service, &mut infra_net)
+                        handle_broker_data(data, &mut spatial_service)
                     }
                     InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
                         handle_orchestrator_data(data, &mut spatial_service)
@@ -146,17 +146,23 @@ fn handle_orchestrator_data(p0: Bytes, p1: &mut SpatialService) -> Option<Vec<(P
     None
 }
 
-fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService, infra_net: &mut InfrastructureNetwork) -> Option<Vec<(PeerType,Bytes)>> {
+fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match SpatialServerPacket::try_from_bytes(raw_bytes) {
-            Some(SpatialServerPacket::Position(update)) => {
-                spatial_service.process_update(update)
+            Some(SpatialServerPacket::PositionUpdate(update)) => {
+                spatial_service.process_position_update(update)
             }
-            Some(SpatialServerPacket::Subdivide(update)) => {
-                spatial_service.process_subdivide(update)
+            Some(SpatialServerPacket::HandoffAccept(update)) => {
+                spatial_service.process_handoff_accept(update)
             }
             Some(SpatialServerPacket::PlayerJoin(update)) => {
                 spatial_service.process_player_join(update)
+            }
+            Some(SpatialServerPacket::ServerHandShake(update)) => {
+                spatial_service.process_server_handshake(update)
+            }
+            Some(SpatialServerPacket::ServerSpawned(update)) => {
+                spatial_service.process_server_spawned(update)
             }
             None => {
                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu.");
