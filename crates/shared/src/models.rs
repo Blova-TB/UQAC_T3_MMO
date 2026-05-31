@@ -45,14 +45,14 @@ define_packet_router! {
 
 define_packet! {
     Subscribe(0x01) {
-        client_id: CustomId,
+        custom_id: CustomId,
         topic_id: u32,
     }
 }
 
 define_packet! {
     Unsubscribe(0x02) {
-        client_id: CustomId,
+        custom_id: CustomId,
         topic_id: u32,
     }
 }
