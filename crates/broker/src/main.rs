@@ -232,10 +232,14 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     }
                 }
 
-                // 🚀 L'ORDRE D'APPARITION DU SPATIAL SERVEUR VERS LA SHARD
-                MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer::TAG => {
-                    let Some(pkt) = MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer::try_from_bytes(data.clone()) else { return; };
+                SpawnPlayerShard::TAG => {
+                    let Some(pkt) = SpawnPlayerShard::try_from_bytes(data.clone()) else { return; };
+
                     let shard_id: u32 = pkt.shard_id.into();
+                    let client_id: u32 = pkt.client_id.into();
+
+                    state.routing_table.subscribe(client_id, shard_id);
+                    info!("🔗 Joueur {} automatiquement abonné au topic de la Shard {}", client_id, shard_id);
 
                     if let Some(shard_conn) = state.shard_conns.get(&shard_id) {
                         if let Some(shard_stream) = &state.shard_streams.get(&shard_id) {

@@ -91,8 +91,8 @@ fn main() {
 fn spawn_login_request(mut commands: Commands, rt: Res<TokioRuntime>) {
     println!("Client : Authentification auprès du Gatekeeper (POST /login)...");
 
-    let username = "test_user".to_string();
-    let password = "password123".to_string();
+    let username = std::env::var("BOT_USER").unwrap_or_else(|_| "test_user".to_string());
+    let password = std::env::var("BOT_PASS").unwrap_or_else(|_| "password123".to_string());
 
     let join_handle = rt.0.spawn(async move {
         let client = reqwest::Client::new();

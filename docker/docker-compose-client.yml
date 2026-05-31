@@ -2,12 +2,11 @@
 
 services:
   bot_client:
+    image: my_bot_client:latest
     build:
       context: ..
       dockerfile: docker/client.Dockerfile
-    # Empêche le conteneur de se fermer inopinément si la console se détache
     tty: true
-    # Facultatif : limiter les ressources pour éviter qu'un bug ne crash ta machine
     deploy:
       resources:
         limits:

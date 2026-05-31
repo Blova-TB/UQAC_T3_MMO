@@ -39,7 +39,7 @@ define_packet_router! {
         ShutdownServer(ShutdownServer),
         ServerHandShake(ServerHandShake),
         AssignShard(AssignShard),
-        MessageQueLeSpatialEnvoieAunGameServerPourFairSpawnerUnJoueurIlPrendDoncDirectementLautoriteEtSubscribeAuInputsDuPlayer(MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer),
+        SpawnPlayerShard(SpawnPlayerShard),
     }
 }
 
@@ -185,7 +185,7 @@ define_packet! {
 }
 
 define_packet! {
-    MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer(0x41) {
+    SpawnPlayerShard(0x41) {
         shard_id: CustomId,
         client_id: CustomId,
         pos: Vec2<f32>,

@@ -7,7 +7,7 @@ use bytes::Bytes;
 use mathtools::Vec2;
 use shared::models::{
     HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest,
-    MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer,
+    SpawnPlayerShard,
     PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHandShake, ServerSpawned,
     SpawnServer,
 };
@@ -70,7 +70,7 @@ impl SpatialService {
             return None;
         };
 
-        let player_spawn = MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer {
+        let player_spawn = SpawnPlayerShard {
             shard_id: shard_id.into(),
             client_id: client_id.into(),
             pos,

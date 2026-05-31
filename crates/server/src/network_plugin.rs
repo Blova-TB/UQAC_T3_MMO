@@ -122,8 +122,8 @@ fn poll_broker(
                     let tag = data[0];
 
                     match tag {
-                        MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer::TAG => {
-                            let Some(pkt) = MessageQueLeSpatialEnvoieAUnGameServerPourFairSpawnerUnJoueur_IlPrendDoncDirectementLAutoriteEtSubscribeAuInputsDuPlayer::try_from_bytes(data) else { return; };
+                        SpawnPlayerShard::TAG => {
+                            let Some(pkt) = SpawnPlayerShard::try_from_bytes(data) else { return; };
 
                             let client_id: u32 = pkt.client_id.into();
                             let bevy_pos = Vec2::new(pkt.pos.x, pkt.pos.y);
