@@ -5,7 +5,7 @@ mod spatial_service;
 mod client_id;
 
 use bytes::Bytes;
-use shared::models::{SpatialServerPacket, SpawnServer, ServerBinaryPacket};
+use shared::models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 use std::time::{Duration, Instant};
 use std::{env, io};
 use std::io::Write;
@@ -143,8 +143,8 @@ fn main() {
 
 fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
-        match SpatialServerPacket::try_from_bytes(raw_bytes) {
-            Some(SpatialServerPacket::ServerSpawned(update)) => {
+        match CustomServerPacket::try_from_bytes(raw_bytes) {
+            Some(CustomServerPacket::ServerSpawned(update)) => {
                 spatial_service.process_server_spawned(update)
             }
             None => {
@@ -161,17 +161,17 @@ fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialServi
 
 fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
-        match SpatialServerPacket::try_from_bytes(raw_bytes) {
-            Some(SpatialServerPacket::PositionUpdate(update)) => {
+        match CustomServerPacket::try_from_bytes(raw_bytes) {
+            Some(CustomServerPacket::PositionUpdate(update)) => {
                 spatial_service.process_position_update(update)
             }
-            Some(SpatialServerPacket::HandoffAccept(update)) => {
+            Some(CustomServerPacket::HandoffAccept(update)) => {
                 spatial_service.process_handoff_accept(update)
             }
-            Some(SpatialServerPacket::PlayerJoin(update)) => {
+            Some(CustomServerPacket::PlayerJoinUpdate(update)) => {
                 spatial_service.process_player_join(update)
             }
-            Some(SpatialServerPacket::ServerHandShake(update)) => {
+            Some(CustomServerPacket::ServerHealthCheck(update)) => {
                 spatial_service.process_server_health_check(update)
             }
             None => {
