@@ -81,11 +81,7 @@ impl SpatialService {
             .into_iter()
             .for_each(|near_shard_id| {
                 if near_shard_id != shard_id {
-                    let handoff_request = HandoffRequest {
-                        shard_id: near_shard_id.into(),
-                        entity_id: client_id.into(),
-                    };
-                    outgoing_packets.push((PeerType::Broker, handoff_request.to_bytes()));
+                    outgoing_packets.push(fast_handoff_req(client_id, near_shard_id));
                 }
             });
 
@@ -137,7 +133,7 @@ impl SpatialService {
             if old_shard_id != new_shard_id {
                 self.quad_tree.remove_player(client_id, old_shard_id)?;
                 println!(
-                    "🚨 CROSSING ALERT : Joueur {:?} a changé de shard ({:?} -> {:?})",
+                    "CROSSING ALERT : Joueur {:?} a changé de shard ({:?} -> {:?})",
                     client_id, old_shard_id, new_shard_id
                 );
 
@@ -162,7 +158,7 @@ impl SpatialService {
                     outgoing_packets.push((PeerType::Broker, handoff_complete.to_bytes()));
                 } else {
                     // Le client n'est pas en ghost dans le nouveau shard :-(
-                    // ducoup on attend que le serv rep par un handoffAccept
+                    // ducoup, on attend que le serv rep par un handoffAccept
                     // normalement il a deja été ping par un handoffRequest quand player est entré dans margin
 
                     self.client_waiting_for_crossing
@@ -194,12 +190,7 @@ impl SpatialService {
 
         // Subscribe
         for &entered_shard in current_visible_shards.difference(&past_visible_shards) {
-            let sub = HandoffRequest {
-                shard_id: entered_shard.into(),
-                entity_id: client_id.into(),
-            };
-
-            outgoing_packets.push((PeerType::Broker, sub.to_bytes()));
+            outgoing_packets.push(fast_handoff_req(client_id, entered_shard));
         }
 
         Some(outgoing_packets)
@@ -212,9 +203,9 @@ impl SpatialService {
         let client_id = ClientId::try_from(update_data.entity_id).ok()?;
         let shard_id = ShardId::try_from(update_data.shard_id).ok()?;
 
-        if let Some(waiting_shard) = self.client_waiting_for_crossing.get(&client_id) {
-            if *waiting_shard == shard_id {
-                // si le client attendait de cross dans cette shard
+        if let Some(&waiting_shard) = self.client_waiting_for_crossing.get(&client_id) {
+            if waiting_shard == shard_id {
+                // si le client attendait pour cross dans cette shard
                 self.client_waiting_for_crossing.remove(&client_id);
 
                 let handoff_complete = HandoffComplete {
@@ -252,38 +243,12 @@ impl SpatialService {
                 return None;
             }
             self.subdivide_request(shard_id);
+        } else {
+            //TODO
+            // current_node = self.quad_tree.get_shard_by_id_mut(shard_id.get_parent_shard_id());
         }
 
         None
-    }
-
-    pub fn subdivide_request(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
-        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
-
-        let current_bounds = &self.quad_tree.get_shard_by_id_mut(shard_id)?.bounds;
-
-        for quads in Quadrant::get_all() {
-            let Rect { min, max } = quads.get_bound_from_parent(current_bounds);
-            let spawn_server = SpawnServer {
-                shard_id: shard_id.new_id_for_child(quads).into(),
-                pos_max: max,
-                pos_min: min,
-            };
-
-            outgoing_packets.push((PeerType::Orchestrator, spawn_server.to_bytes()));
-        }
-
-        self.shard_waiting_for_subdivide.insert(
-            shard_id,
-            Vec::from([
-                (shard_id.new_id_for_child(Quadrant::TopLeft), false),
-                (shard_id.new_id_for_child(Quadrant::TopRight), false),
-                (shard_id.new_id_for_child(Quadrant::BottomLeft), false),
-                (shard_id.new_id_for_child(Quadrant::BottomRight), false),
-            ]),
-        );
-
-        Some(outgoing_packets)
     }
 
     pub fn process_server_spawned(
@@ -325,6 +290,35 @@ impl SpatialService {
         None
     }
 
+    pub fn subdivide_request(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
+
+        let current_bounds = &self.quad_tree.get_shard_by_id_mut(shard_id)?.bounds;
+
+        for quads in Quadrant::get_all() {
+            let Rect { min, max } = quads.get_bound_from_parent(current_bounds);
+            let spawn_server = SpawnServer {
+                shard_id: shard_id.new_id_for_child(quads).into(),
+                pos_max: max,
+                pos_min: min,
+            };
+
+            outgoing_packets.push((PeerType::Orchestrator, spawn_server.to_bytes()));
+        }
+
+        self.shard_waiting_for_subdivide.insert(
+            shard_id,
+            Vec::from([
+                (shard_id.new_id_for_child(Quadrant::TopLeft), false),
+                (shard_id.new_id_for_child(Quadrant::TopRight), false),
+                (shard_id.new_id_for_child(Quadrant::BottomLeft), false),
+                (shard_id.new_id_for_child(Quadrant::BottomRight), false),
+            ]),
+        );
+
+        Some(outgoing_packets)
+    }
+
     pub fn subdivide_node(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
@@ -342,24 +336,22 @@ impl SpatialService {
                              near_shards: Vec<ShardId>,
                              packets: &mut Vec<(PeerType, Bytes)>| {
             for near_shard_id in near_shards {
-                let handoff_request = HandoffRequest {
-                    shard_id: near_shard_id.into(),
-                    entity_id: entity_id.into(),
-                };
-                packets.push((PeerType::Broker, handoff_request.to_bytes()));
+                packets.push(fast_handoff_req(entity_id, near_shard_id));
             }
         };
 
         let players = current_node.subdivide_quad_tree();
 
-        // on prend tous les joueurs et on les met dans self.waiting_for_crossing
+        // on prend tous les joueurs et on les met dans self.client_waiting_for_crossing
         // dé qu'ils sont accepté dans le nouveau shard (handoffAccept), ils changenet de shard
 
         for (player_id, player_new_shard_id, player_pos) in players {
             self.client_waiting_for_crossing
                 .insert(player_id, player_new_shard_id);
 
-            // on recalcule pour tout les player de la shard si ils sont dans des marge entre les 4 nouvelles shard
+            self.client_to_shards.insert(player_id, player_new_shard_id);
+
+            // on recalcule pour tous les player de la shard si ils sont dans des marge entre les 4 nouvelles shard
             // pas besoin de se retirer soit meme (shard) car il le faut aussi !
 
             let near_shards = current_node.shards_near(player_pos, self.margin);
@@ -388,4 +380,40 @@ impl SpatialService {
 
         Some(outgoing_packets)
     }
+
+    pub fn merge_node(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
+
+        let current_node = self.quad_tree.get_shard_by_id_mut(shard_id)?;
+
+        let players = current_node.merge_quad_tree(shard_id);
+
+        for player_id in players.0 {
+            self.client_waiting_for_crossing.insert(player_id, shard_id);
+            self.client_to_shards.insert(player_id, shard_id);
+            outgoing_packets.push(fast_handoff_req(player_id, shard_id));
+        }
+
+        for old_shard_id in players.1 {
+            if let Some(ghosts) = self.ghost_client.get_mut(&old_shard_id) {
+                for ghost in ghosts.drain(..) {
+                    let ghost_current_shar_id = self.client_to_shards.get(&ghost)?.clone();
+                    if ghost_current_shar_id != shard_id {
+                        outgoing_packets.push(fast_handoff_req(ghost, shard_id));
+                    }
+                }
+            }
+        }
+
+        Some(outgoing_packets)
+    }
+
+}
+
+pub fn fast_handoff_req(client_id: ClientId, new_shard_id: ShardId) -> (PeerType, Bytes) {
+    let handoff_complete = HandoffRequest {
+        shard_id: new_shard_id.into(),
+        entity_id: client_id.into(),
+    };
+    (PeerType::Broker, handoff_complete.to_bytes())
 }

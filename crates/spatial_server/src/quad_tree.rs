@@ -183,6 +183,22 @@ impl QuadTree {
         player_moved
     }
 
+    pub fn merge_quad_tree(&mut self, shard_id: ShardId) -> (Vec<ClientId>, AHashSet<ShardId>){
+
+        let mut player_moved= (Vec::new(), AHashSet::new());
+
+        self.get_all_player().into_iter().for_each(|(id, old_shard_id, pos)| {
+            self.players.insert(id, pos);
+            player_moved.0.push(id);
+            player_moved.1.insert(old_shard_id);
+        });
+
+        self.shard_id = Some(shard_id);
+        self.children = None;
+
+        player_moved
+    }
+
     pub fn get_shard_mut(&mut self, quad: Quadrant) -> Option<&mut QuadTree> {
         let children = self.children.as_mut()?;
         Some(&mut children[quad as usize])
@@ -211,5 +227,22 @@ impl QuadTree {
         }
 
         Some(current_node)
+    }
+
+    pub fn get_all_player(&self) -> Vec<(ClientId, ShardId, Vec2<f32>)> {
+        if let Some(children) = &self.children {
+            let mut players = Vec::new();
+            for child in children.iter() {
+                players.extend(child.get_all_player());
+            }
+            players
+        } else if let Some(shard_id) = self.shard_id {
+            self.players
+                .iter()
+                .map(|(id, pos)| (*id, shard_id, *pos))
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 }
