@@ -1,5 +1,6 @@
 ﻿use bytes::{Buf, Bytes};
 use mathtools::Vec2;
+use crate::custom_id::CustomId;
 
 pub trait ServerBinaryPacket: Sized {
     const TAG: u8;
@@ -28,18 +29,21 @@ pub trait ServerBinaryPacket: Sized {
     }
 }
 
-pub trait BinaryField {
-    const SIZE: usize;
-    fn read_from(data: &mut Bytes) -> Self;
+pub trait BinaryField : Sized {
+    const MIN_SIZE: usize;
+    fn try_read_from(data: &mut Bytes) -> Option<Self>;
     fn write_to(&self, buf: &mut Vec<u8>);
 }
 
 impl BinaryField for u32 {
-    const SIZE: usize = 4;
+    const MIN_SIZE: usize = 4;
 
     #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        data.get_u32_le()
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+        Some(data.get_u32_le())
     }
 
     #[inline]
@@ -48,12 +52,49 @@ impl BinaryField for u32 {
     }
 }
 
-impl BinaryField for Vec2<f32> {
-    const SIZE: usize = 8;
+impl BinaryField for u16 {
+    const MIN_SIZE: usize = 2;
 
     #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        Vec2::new(data.get_f32_le(), data.get_f32_le())
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+        Some(data.get_u16_le())
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+impl BinaryField for u8 {
+    const MIN_SIZE: usize = 1;
+
+    #[inline]
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+        Some(data.get_u8())
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.push(*self);
+    }
+}
+
+impl BinaryField for Vec2<f32> {
+    const MIN_SIZE: usize = 8;
+
+    #[inline]
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+        Some(Vec2::new(data.get_f32_le(), data.get_f32_le()))
     }
 
     #[inline]
@@ -63,78 +104,77 @@ impl BinaryField for Vec2<f32> {
     }
 }
 
-impl BinaryField for u16 {
-    const SIZE: usize = 2;
+impl<T: BinaryField> BinaryField for Vec<T> {
+    const MIN_SIZE: usize = 4; // Taille du préfixe (u32)
 
     #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        data.get_u16_le()
+    fn try_read_from(data: &mut Bytes) -> Option<Self>{
+
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+
+        let len = data.get_u32_le() as usize;
+
+        if data.remaining() < len.saturating_mul(T::MIN_SIZE) {
+            return None;
+        }
+
+        let mut vec = Vec::with_capacity(len);
+        for _ in 0..len {
+            vec.push(T::try_read_from(data)?);
+        }
+        Some(vec)
     }
 
     #[inline]
     fn write_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.to_le_bytes());
-    }
-}
-
-impl BinaryField for Vec<u8>{
-    const SIZE: usize = 0;
-
-    #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        let len = data.remaining();
-        let mut buf = vec![0; len];
-        data.copy_to_slice(&mut buf);
-        buf
-    }
-
-    #[inline]
-    fn write_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(self);
-    }
-}
-
-impl BinaryField for u8 {
-    const SIZE: usize = 1;
-
-    #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        data.get_u8()
-    }
-
-    #[inline]
-    fn write_to(&self, buf: &mut Vec<u8>) {
-        buf.push(*self);
-    }
-}
-
-impl BinaryField for f32{
-    const SIZE: usize = 4;
-
-    #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        data.get_f32_le()
-    }
-
-    #[inline]
-    fn write_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.to_le_bytes());
+        buf.extend_from_slice(&(self.len() as u32).to_le_bytes());
+        for item in self {
+            item.write_to(buf);
+        }
     }
 }
 
 impl<const N: usize> BinaryField for [u8; N] {
-    const SIZE: usize = N;
+    const MIN_SIZE: usize = N;
 
     #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
         let mut arr = [0; N];
         data.copy_to_slice(&mut arr);
-        arr
+        Some(arr)
     }
 
     #[inline]
     fn write_to(&self, buf: &mut Vec<u8>) {
         buf.extend_from_slice(self);
+    }
+}
+
+pub struct PlayerData {
+    pub client_id: CustomId,
+    pub pos: Vec2<f32>,
+}
+
+impl BinaryField for PlayerData {
+    const MIN_SIZE: usize = CustomId::MIN_SIZE + <Vec2<f32> as BinaryField>::MIN_SIZE;
+
+    #[inline]
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        Some(Self {
+            client_id: CustomId::try_read_from(data)?,
+            pos: Vec2::try_read_from(data)?,
+        })
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        self.client_id.write_to(buf);
+        self.pos.write_to(buf);
     }
 }
 
@@ -154,14 +194,12 @@ macro_rules! define_packet {
         // 2. Implémentation du trait principal
         impl ServerBinaryPacket for $struct_name {
             const TAG: u8 = $tag;
-
-            // Calcul de la taille : 1 octet (TAG) + somme des tailles des champs
-            const PACKET_SIZE: usize = 1 $( + <$field_type as BinaryField>::SIZE )*;
+            const PACKET_SIZE: usize = 1 $( + <$field_type as BinaryField>::MIN_SIZE )*;
 
             #[inline]
             fn parse_payload(data: &mut bytes::Bytes) -> Option<Self> {
                 Some(Self {
-                    $( $field_name: <$field_type as BinaryField>::read_from(data), )*
+                    $( $field_name: <$field_type as BinaryField>::try_read_from(data)?, )*
                 })
             }
 
