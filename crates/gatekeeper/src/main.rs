@@ -3,9 +3,6 @@ extern crate rocket;
 use tokio::net::lookup_host;
 use sqlx::postgres::PgPoolOptions;
 
-mod auth;
-mod jwt;
-mod models;
 mod routes;
 
 use crate::routes::{get_me, login, register, get_server};
