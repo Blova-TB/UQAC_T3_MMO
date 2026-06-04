@@ -27,7 +27,8 @@ fn main() {
         10.0,
         85,
         50,
-        15.0
+        15.0,
+        1.5,
     );
 
     let orchestrator_addr = env::var("ORCHESTRATOR_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
