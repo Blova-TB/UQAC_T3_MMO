@@ -80,11 +80,14 @@ impl From<CustomId> for u32 {
 }
 
 impl BinaryField for CustomId {
-    const SIZE: usize = 4;
+    const MIN_SIZE: usize = 4;
 
     #[inline]
-    fn read_from(data: &mut Bytes) -> Self {
-        Self::from(data.get_u32_le())
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+        Some(Self::from(data.get_u32_le()))
     }
 
     #[inline]
