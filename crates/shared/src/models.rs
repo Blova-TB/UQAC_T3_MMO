@@ -155,6 +155,12 @@ define_packet! {
 }
 
 define_packet! {
+    ShutdownServerOnEmpty(0x34) {
+        shard_id: CustomId,
+    }
+}
+
+define_packet! {
     AssignShard(0x40) {
         shard_id: CustomId,
     }

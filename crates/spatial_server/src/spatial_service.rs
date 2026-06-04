@@ -5,24 +5,20 @@ use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{
-    HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest,
-    SpawnPlayerShard,
-    PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHealthCheck, ServerSpawned,
-    SpawnServer,
-};
+use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHealthCheck, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer};
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
-    pub client_to_shards: AHashMap<ClientId, ShardId>,
-    pub ghost_client: AHashMap<ShardId, Vec<ClientId>>, // shard_id -> client_id: is replicate in ghost on this serv ? (if exist alors le shard est pret à recevoir l'autorité)
-    pub client_waiting_for_crossing: AHashMap<ClientId, ShardId>, // client_id -> (shard_id) : client pas encore repliqué en ghost mais qui a deja cross.
+    pub client_to_shards: AHashMap<ClientId, (ShardId, std::time::Instant)>, // client_id → (shard_id, last_shard_change_time) (temps pour l'Hystérésis)
+    pub ghost_client: AHashMap<ShardId, Vec<ClientId>>, // shard_id → client_id: is replicate in ghost on this serv ? (if exist alors le shard est pret à recevoir l'autorité)
+    pub client_waiting_for_crossing: AHashMap<ClientId, ShardId>, // client_id → (shard_id) : client pas encore repliqué en ghost mais qui a deja cross.
     pub shard_waiting_for_subdivide: AHashMap<ShardId, Vec<(ShardId, bool)>>, // shard_id : shard qui a demandé une subdivision et qui attend que tous les clients soient en ghost pour subdiviser
     pub shard_waiting_for_merge: AHashSet<ShardId>,
     pub margin: f32,
     pub occupation_to_subdivide: u8,
     pub occupation_to_merge: u8,
     pub time_for_merge_after_subdivide: f32,
+    pub hysteresis_time: f32,
 }
 
 impl SpatialService {
@@ -33,6 +29,7 @@ impl SpatialService {
         occupation_to_subdivide: u8,
         occupation_to_merge: u8,
         time_for_merge_after_subdivide: f32,
+        hysteresis_time: f32,
     ) -> Self {
         if max_depth > ShardId::MAX_DEPTH {
             panic!(
@@ -52,6 +49,7 @@ impl SpatialService {
             occupation_to_subdivide,
             occupation_to_merge,
             time_for_merge_after_subdivide,
+            hysteresis_time,
         }
     }
 
@@ -101,70 +99,39 @@ impl SpatialService {
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
 
         let new_pos = update_data.pos;
-        let new_shard_id = self.quad_tree.insert_player(client_id, new_pos)?;
 
-        let old_shard_id_opt = self.client_to_shards.insert(client_id, new_shard_id);
-        let old_pos_opt: Option<Vec2<f32>>;
+        let new_shard_id = self.quad_tree.shard_id_for(new_pos)?;
 
-        let Some(old_shard_id) = old_shard_id_opt else {
+        let Some(old_shard_id) = self.client_to_shards.get(&client_id) else {
             println!("error : NOUVEAU JOUEUR dans le process_update ?????");
             return None;
         };
 
-        if let Some(old_node) = self.quad_tree.get_shard_by_id_mut(old_shard_id) {
-            old_pos_opt = old_node.players.get(&client_id).copied();
-        } else {
+        let Some(old_pos) = self.quad_tree.hard_update_player_position(client_id, old_shard_id.0, new_pos) else {
             println!(
-                "error : ANCIEN SHARD INEXISTANT dans le process_update ????? (client_id: {:?}, old_shard_id: {:?})",
+                "error : player position not found in quad_tree for client_id {:?} and shard_id {:?} (process_position_update)",
                 client_id, old_shard_id
             );
-            return None;
-        }
-
-        let Some(old_pos) = old_pos_opt else {
-            println!(
-                "error : ANCIEN JOUEUR INEXISTANT dans le process_update ????? (client_id: {:?}, old_shard_id: {:?})",
-                client_id, old_shard_id
-            );
+            // normalement impossible
             return None;
         };
 
-        if let Some(old_shard_id) = old_shard_id_opt {
-            if old_shard_id != new_shard_id {
-                self.quad_tree.remove_player(client_id, old_shard_id)?;
-                println!(
-                    "CROSSING ALERT : Joueur {:?} a changé de shard ({:?} -> {:?})",
-                    client_id, old_shard_id, new_shard_id
-                );
+        if old_shard_id.0 != new_shard_id
+            && old_shard_id.1.elapsed() > std::time::Duration::from_secs_f32(self.hysteresis_time)
+        {
+            println!(
+                "CROSSING ALERT : Joueur {:?} a changé de shard ({:?} -> {:?})",
+                client_id, old_shard_id.0, new_shard_id
+            );
 
-                self.client_waiting_for_crossing.remove(&client_id);
-
-                if let Some(ghost_in_shards) = self.ghost_client.get_mut(&new_shard_id)
-                    && ghost_in_shards.contains(&client_id)
-                {
-                    // Le client est déjà en ghost dans le nouveau shard !!!
-                    ghost_in_shards.retain(|&s| s != client_id);
-
-                    self.ghost_client
-                        .entry(old_shard_id)
-                        .or_default()
-                        .push(client_id);
-
-                    let handoff_complete = HandoffComplete {
-                        shard_id: new_shard_id.into(),
-                        entity_id: client_id.into(),
-                    };
-
-                    outgoing_packets.push((PeerType::Broker, handoff_complete.to_bytes()));
-                } else {
-                    // Le client n'est pas en ghost dans le nouveau shard :-(
-                    // ducoup, on attend que le serv rep par un handoffAccept
-                    // normalement il a deja été ping par un handoffRequest quand player est entré dans margin
-
-                    self.client_waiting_for_crossing
-                        .insert(client_id, new_shard_id);
-                }
-            }
+            outgoing_packets.append(
+                self.apply_client_cross(
+                    client_id,
+                    old_shard_id.0,
+                    new_shard_id,
+                    new_pos
+                ).as_mut()
+            );
         }
 
         let current_visible_shards: AHashSet<ShardId> = self
@@ -228,9 +195,26 @@ impl SpatialService {
         &mut self,
         update_data: ServerHealthCheck,
     ) -> Option<Vec<(PeerType, Bytes)>> {
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
 
-        let current_node = self.quad_tree.get_shard_by_id_mut(shard_id)?;
+        // on vérifie que le shard_id existe bien dans le quad_tree, sinon c'est chelou
+
+        let Some(current_node) = self.quad_tree.get_shard_by_id_mut(shard_id) else {
+            println!(
+                "error : shard_id {:?} not found in quad_tree (process_server_health_check)",
+                shard_id
+            );
+            return None;
+        };
+
+        let Some(_) = current_node.shard_id else {
+            println!(
+                "error : shard_id {:?} is not a leaf shard in quad_tree (process_server_health_check)",
+                shard_id
+            );
+            return None;
+        };
 
         current_node.server_occupation = Option::from(update_data.occupancy);
 
@@ -242,33 +226,87 @@ impl SpatialService {
                 );
                 return None;
             }
-            self.subdivide_request(shard_id);
-        } else if (shard_id != ShardId::ROOT) && update_data.occupancy < self.occupation_to_merge {
-            let Some(parent_shard_id_opt) = shard_id.get_parent_shard_id() else {
+            if self.shard_waiting_for_subdivide.contains_key(&shard_id) {
                 println!(
-                    "WHHHAAATT YOU ARE THE ROOT SHARD ??? SO COOOOL !!! but ... no merge for u (process_server_health_check)"
+                    "Shard {:?} is already waiting for subdivide, cannot request another subdivision.",
+                    shard_id
+                );
+                return None;
+            }
+            if current_node.creation_date.elapsed().as_secs_f32() < self.time_for_merge_after_subdivide {
+                println!(
+                    "Shard {:?} was recently subdivided or merge, waiting before requesting another subdivision.",
+                    shard_id
+                );
+                return None;
+            }
+
+            outgoing_packets.append(self.subdivide_request(shard_id)?.as_mut());
+
+        } else if (shard_id != ShardId::ROOT) && update_data.occupancy < self.occupation_to_merge {
+
+            let Some(parent_shard_id) = shard_id.get_parent_shard_id() else {
+                println!(
+                    "shard_id != ShardId::ROOT but YOU ARE THE ROOT SHARD ??? SO COOOOL !!! but ... no merge for u (process_server_health_check)"
                 );
                 return None;
             };
 
-            if let Some(parent_node) = self.quad_tree.get_shard_by_id_mut(parent_shard_id_opt) {
-                if parent_node.get_occupation_somme() < self.occupation_to_merge as u32 {
-                    if parent_node.last_subdivide_time.map_or(true, |time| {
-                        time.elapsed().as_secs_f32() > self.time_for_merge_after_subdivide
-                    }) {
-                        self.merge_request(parent_shard_id_opt);
+            if let Some(parent_node) = self.quad_tree.get_shard_by_id_mut(parent_shard_id) {
+
+                if self.shard_waiting_for_merge.contains(&parent_shard_id) {
+                    println!(
+                        "Parent Shard {:?} is already waiting for merge, cannot request another merge.",
+                        parent_shard_id
+                    );
+                    return None;
+                }
+
+                if parent_node.get_occupation_somme(self.time_for_merge_after_subdivide) < self.occupation_to_merge as u32 {
+                    // on verifie si un parrent du node n'est pas deja en attente de merge.
+
+                    let mut useless_serv:Vec<ShardId> = Vec::new();
+
+                    for merging_shard_id in self.shard_waiting_for_merge.iter() {
+                        if merging_shard_id.is_ancestor_of(parent_shard_id) {
+                            println!(
+                                "Parent Shard {:?} has an ancestor {:?} already waiting for merge, cannot request another merge.",
+                                parent_shard_id, merging_shard_id
+                            );
+                            return None;
+                        }
+                        if merging_shard_id.is_descendant_of(parent_shard_id) {
+                            println!(
+                                "Parent Shard {:?} has a descendant {:?} already waiting for merge",
+                                parent_shard_id, merging_shard_id
+                            );
+                            useless_serv.push(*merging_shard_id);
+                        }
                     }
+
+                    for useless in useless_serv.iter() {
+                        let useless_serv_packet = ShutdownServerOnEmpty {
+                            shard_id: (*useless).into(),
+                        };
+                        outgoing_packets.push((PeerType::Orchestrator, useless_serv_packet.to_bytes()));
+                    }
+
+                    self.shard_waiting_for_merge.retain(|s| !useless_serv.contains(s));
+
+                    outgoing_packets.append(self.merge_request(parent_shard_id)?.as_mut());
                 }
             }
         }
 
-        None
+        Some(outgoing_packets)
     }
 
     pub fn process_server_spawned(
         &mut self,
         update_data: ServerSpawned,
     ) -> Option<Vec<(PeerType, Bytes)>> {
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
+
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
 
         if let Some(parent_shard_id) = shard_id.get_parent_shard_id()
@@ -287,11 +325,11 @@ impl SpatialService {
             if children.iter().all(|&(_, spawned)| spawned) {
                 self.shard_waiting_for_subdivide.remove(&parent_shard_id);
 
-                self.subdivide_node(parent_shard_id);
+                outgoing_packets.append(self.subdivide_node(parent_shard_id)?.as_mut());
             }
         } else if let Some(_) = self.shard_waiting_for_merge.get(&shard_id) {
             self.shard_waiting_for_merge.remove(&shard_id);
-            self.merge_node(shard_id);
+            outgoing_packets.append(self.merge_node(shard_id)?.as_mut());
         } else {
             println!(
                 "error : shard_id {:?} not found in any waiting list (process_server_spawned)",
@@ -299,7 +337,7 @@ impl SpatialService {
             );
         }
 
-        None
+        Some(outgoing_packets)
     }
 
     pub fn subdivide_request(&mut self, shard_id: ShardId) -> Option<Vec<(PeerType, Bytes)>> {
@@ -352,7 +390,7 @@ impl SpatialService {
             }
         };
 
-        let players = current_node.subdivide_quad_tree();
+        let (players,player_loss) = current_node.subdivide_quad_tree();
 
         // on prend tous les joueurs et on les met dans self.client_waiting_for_crossing
         // dé qu'ils sont accepté dans le nouveau shard (handoffAccept), ils changenet de shard
@@ -361,13 +399,32 @@ impl SpatialService {
             self.client_waiting_for_crossing
                 .insert(player_id, player_new_shard_id);
 
-            self.client_to_shards.insert(player_id, player_new_shard_id);
+            self.client_to_shards
+                .insert(player_id, (player_new_shard_id, std::time::Instant::now()));
 
             // on recalcule pour tous les player de la shard si ils sont dans des marge entre les 4 nouvelles shard
             // pas besoin de se retirer soit meme (shard) car il le faut aussi !
 
             let near_shards = current_node.shards_near(player_pos, self.margin);
             push_handoffs(player_id, near_shards, &mut outgoing_packets);
+        }
+
+
+        for (player_id, pos) in player_loss {
+
+            let old_shard_id = shard_id;
+            let new_shard_id = self.quad_tree.shard_id_for(pos)?;
+
+            outgoing_packets.append(
+                self.apply_client_cross(
+                    player_id,
+                    old_shard_id,
+                    new_shard_id,
+                    pos
+                ).as_mut()
+            );
+
+            outgoing_packets.push(fast_handoff_req(player_id, old_shard_id));
         }
 
         // /!\ gerer aussi les ghosts de l'ancien chard (parent)
@@ -379,7 +436,7 @@ impl SpatialService {
             // pour chaque ghost de la shard qui a été subdivisé,
             // on les met en ghost dans les nouvelles shard qui sont dans la marge du player,
             // on doit donc recup la position du player en allant la chercher dans le quad_tree
-            let player_shard_id = self.client_to_shards.get(&player)?.clone();
+            let player_shard_id = self.client_to_shards.get(&player)?.0;
             let player_pos = self
                 .quad_tree
                 .get_shard_by_id(player_shard_id)?
@@ -389,6 +446,12 @@ impl SpatialService {
             let near_shards = current_node.shards_near(player_pos, self.margin);
             push_handoffs(player, near_shards, &mut outgoing_packets);
         }
+
+        let shutdown_packet = ShutdownServerOnEmpty {
+            shard_id: shard_id.into(),
+        };
+
+        outgoing_packets.push((PeerType::Orchestrator, shutdown_packet.to_bytes()));
 
         Some(outgoing_packets)
     }
@@ -420,22 +483,80 @@ impl SpatialService {
 
         for player_id in players.0 {
             self.client_waiting_for_crossing.insert(player_id, shard_id);
-            self.client_to_shards.insert(player_id, shard_id);
+            self.client_to_shards
+                .insert(player_id, (shard_id, std::time::Instant::now()));
             outgoing_packets.push(fast_handoff_req(player_id, shard_id));
         }
 
-        for old_shard_id in players.1 {
-            if let Some(ghosts) = self.ghost_client.get_mut(&old_shard_id) {
+        for old_shard_id in &players.1 {
+            if let Some(ghosts) = self.ghost_client.get_mut(old_shard_id) {
                 for ghost in ghosts.drain(..) {
                     let ghost_current_shar_id = self.client_to_shards.get(&ghost)?.clone();
-                    if ghost_current_shar_id != shard_id {
+                    if ghost_current_shar_id.0 != shard_id {
                         outgoing_packets.push(fast_handoff_req(ghost, shard_id));
                     }
                 }
             }
         }
 
+        for old_shard_id in &players.1 {
+            let shutdown_packet = ShutdownServerOnEmpty {
+                shard_id: (*old_shard_id).into(),
+            };
+            outgoing_packets.push((PeerType::Orchestrator, shutdown_packet.to_bytes()));
+        }
+
         Some(outgoing_packets)
+    }
+
+    pub fn apply_client_cross(
+        &mut self,
+        client_id: ClientId,
+        old_shard_id: ShardId,
+        new_shard_id: ShardId,
+        new_pos: Vec2<f32>,
+    ) -> Vec<(PeerType, Bytes)> {
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
+
+        self.client_waiting_for_crossing.remove(&client_id);
+
+        if let Some(ghost_in_shards) = self.ghost_client.get_mut(&new_shard_id)
+            && ghost_in_shards.contains(&client_id)
+        {
+            // Le client est déjà en ghost dans le nouveau shard !!!
+            ghost_in_shards.retain(|&s| s != client_id);
+
+            self.ghost_client
+                .entry(old_shard_id)
+                .or_default()
+                .push(client_id);
+
+            let handoff_complete = HandoffComplete {
+                shard_id: new_shard_id.into(),
+                entity_id: client_id.into(),
+            };
+
+            outgoing_packets.push((PeerType::Broker, handoff_complete.to_bytes()));
+        } else {
+            // Le client n'est pas en ghost dans le nouveau shard :-(
+            // ducoup, on attend que le serv rep par un handoffAccept
+            // normalement, il a deja été ping par un handoffRequest quand player est entré dans margin
+
+            self.client_waiting_for_crossing
+                .insert(client_id, new_shard_id);
+        }
+
+        if self.quad_tree.insert_player(client_id, new_pos).is_none() {
+            println!(
+                "error : failed to insert player position in quad_tree for client_id {:?} and shard_id {:?} (apply_client_cross)",
+                client_id, new_shard_id
+            );
+        };
+
+        self.quad_tree.remove_player(client_id, old_shard_id);
+        self.client_to_shards.insert(client_id, (new_shard_id, std::time::Instant::now()));
+
+        outgoing_packets
     }
 }
 
