@@ -1,0 +1,71 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>QuadTree Spatial Server</title>
+    <style>
+        body { background: #1a1a2e; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        canvas { background: #16213e; border: 2px solid #0f3460; box-shadow: 0 0 20px rgba(0,0,0,0.5); margin-top: 20px;}
+        #status { color: #e94560; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<h2>🚀 Visualiseur Live - Spatial Server</h2>
+<div id="status">Déconnecté (Attente de ws://localhost:8080...)</div>
+
+<canvas id="map" width="800" height="800"></canvas>
+
+<script>
+    const canvas = document.getElementById('map');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+
+    // Connecte-toi à l'adresse de ton conteneur Docker
+    const ws = new WebSocket('ws://localhost:8080');
+
+    ws.onopen = () => { statusEl.style.color = '#4caf50'; statusEl.innerText = "Connecté ! En attente de données..."; };
+    ws.onclose = () => { statusEl.style.color = '#e94560'; statusEl.innerText = "Déconnecté."; };
+
+    ws.onmessage = (event) => {
+        const state = JSON.parse(event.data);
+
+        // Effacer le dessin précédent
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Calculer l'échelle (ex: si le jeu fait 1000x1000 et le canvas 800x800, scale = 0.8)
+        const gameWidth = state.bounds.max_x - state.bounds.min_x;
+        const gameHeight = state.bounds.max_y - state.bounds.min_y;
+        const scaleX = canvas.width / gameWidth;
+        const scaleY = canvas.height / gameHeight;
+
+        // 1. Dessiner les Shards
+        state.shards.forEach(shard => {
+            const w = (shard.rect.max_x - shard.rect.min_x) * scaleX;
+            const h = (shard.rect.max_y - shard.rect.min_y) * scaleY;
+            const x = shard.rect.min_x * scaleX;
+            const y = shard.rect.min_y * scaleY;
+
+            ctx.strokeStyle = '#0f3460';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, w, h);
+
+            // Optionnel : Afficher la profondeur du QuadTree
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.font = '10px Arial';
+            ctx.fillText(`D:${shard.depth}`, x + 5, y + 15);
+        });
+
+        // 2. Dessiner les Joueurs
+        state.players.forEach(player => {
+            const x = player.x * scaleX;
+            const y = player.y * scaleY;
+
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = '#e94560';
+            ctx.fill();
+        });
+    };
+</script>
+</body>
+</html>

@@ -9,7 +9,7 @@ use routing::OptimizedRoutingTable;
 
 use shared::models::*;
 use shared::network::protocols::QuicBackend;
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream};
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -97,9 +97,10 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         if let (Some(s_conn), Some(s_stream)) = (&state.spatial_server_conn, &state.spatial_server_stream) {
                             let _ = peer.send(s_conn, s_stream, PlayerJoinUpdate {
                                 client_id: CustomId::from(client_id),
-                                pos: mathtools::Vec2::new(token_data.claims.pos_x, token_data.claims.pos_y),
+                                pos: Vec2::new(token_data.claims.pos_x, token_data.claims.pos_y),
                             }.to_bytes());
                         }
+                        println!("PlayerJoinUpdate send with client id {} at position : x={}, y={}", client_id, token_data.claims.pos_x, token_data.claims.pos_y);
                     }
                 }
 
@@ -159,6 +160,30 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     state.routing_table.subscribe(pkt.client_id.into(), shard_id);
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
                         let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                    }
+                }
+
+                ServerHeartBeat::TAG => {
+                    if let Some(s_conn) = &state.spatial_server_conn {
+                        let unreliable_stream = GameStream::new(
+                            shared::constants::STREAM_PHYSICS,
+                            GameStreamReliability::Unreliable
+                        );
+                        let _ = peer.send(s_conn, &unreliable_stream, data);
+                    } else {
+                        warn!("⚠️ ServerHeartBeat ignoré : Spatial Server non connecté.");
+                    }
+                }
+
+                PositionUpdate::TAG => {
+                    if let Some(s_conn) = &state.spatial_server_conn {
+                        let unreliable_stream = GameStream::new(
+                            shared::constants::STREAM_PHYSICS,
+                            GameStreamReliability::Unreliable
+                        );
+                        let _ = peer.send(s_conn, &unreliable_stream, data);
+                    } else {
+                        warn!("⚠️ PositionUpdate ignoré : Spatial Server non connecté.");
                     }
                 }
 

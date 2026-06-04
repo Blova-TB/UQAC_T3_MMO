@@ -26,8 +26,8 @@ pub async fn register(
             .bind(&user_data.username)
             .bind(&hashed)
             .bind(random_client_id)
-            .bind(0i32)
-            .bind(0i32)
+            .bind(0.0f32)
+            .bind(0.0f32)
             .execute(&**pool)
             .await;
 
@@ -74,13 +74,10 @@ pub async fn login(
     let user_id: Uuid = row.try_get("id").map_err(|e| (Status::InternalServerError, e.to_string()))?;
     let password_hash: String = row.try_get("password_hash").map_err(|e| (Status::InternalServerError, e.to_string()))?;
 
-    // PostgreSQL stocke le INTEGER sous forme de i32 en Rust.
     let custom_id_i32: i32 = row.try_get("custom_id").map_err(|e| (Status::InternalServerError, e.to_string()))?;
-    let pos_x_cm: i32 = row.try_get("pos_x").unwrap_or(0);
-    let pos_y_cm: i32 = row.try_get("pos_y").unwrap_or(0);
 
-    let pos_x: f32 = pos_x_cm as f32 / 100.0;
-    let pos_y: f32 = pos_y_cm as f32 / 100.0;
+    let pos_x: f32 = row.try_get("pos_x").unwrap_or(0.0);
+    let pos_y: f32 = row.try_get("pos_y").unwrap_or(0.0);
 
     let valid = verify(&password, &password_hash)
         .map_err(|_| (Status::Unauthorized, "Erreur vérification".to_string()))?;

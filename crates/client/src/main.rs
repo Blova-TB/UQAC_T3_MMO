@@ -6,7 +6,7 @@ use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::time::Duration;
 use bevy::tasks::IoTaskPool;
-
+use bitcode::{Decode, Encode};
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use shared::models::*;
@@ -49,6 +49,19 @@ pub struct ClientState {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
 }
+
+// à déplacer ////////////
+#[derive(Encode, Decode)]
+pub struct ServerSyncMessage {
+    pub players: Vec<PlayerPositionData>,
+}
+
+#[derive(Encode, Decode)]
+pub struct PlayerPositionData {
+    pub entity_bits: u64,
+    pub position: [f32; 2],
+}
+////////////////////////
 
 #[derive(Resource)]
 pub struct LocalPlayerId(pub u32);

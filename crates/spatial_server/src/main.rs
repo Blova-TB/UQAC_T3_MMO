@@ -3,6 +3,7 @@ mod shard_id;
 mod network;
 mod spatial_service;
 mod client_id;
+mod visualizer;
 
 use bytes::Bytes;
 use shared::models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
@@ -15,6 +16,7 @@ use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use spatial_service::SpatialService;
 use crate::shard_id::ShardId;
 use std::net::ToSocketAddrs;
+use std::sync::mpsc;
 
 fn main() {
     println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");
@@ -69,6 +71,14 @@ fn main() {
     );
 
     let target_tick_duration = Duration::from_secs_f64(1.0 / 60.0);
+
+    // 2. Démarrage du Visualiseur juste avant la boucle loop !
+    let (viz_tx, viz_rx) = mpsc::channel();
+    // On écoute sur 0.0.0.0 pour que Docker laisse passer la connexion vers l'extérieur
+    visualizer::start_visualizer_server("0.0.0.0:8080", viz_rx);
+
+    // Limiteur d'envoi pour ne pas saturer le JSON (ex: on envoie 10 fois par seconde, pas 60)
+    let mut last_viz_update = Instant::now();
 
     // 🚩 Drapeau pour s'assurer qu'on ne demande la Shard Root qu'une seule fois
     let mut root_shard_requested = false;
@@ -132,6 +142,13 @@ fn main() {
             }
         }
 
+        // 3. À LA FIN de la boucle loop (juste avant le calcul du sleep)
+        if last_viz_update.elapsed() >= Duration::from_millis(100) {
+            let json_state = visualizer::extract_viz_state(&spatial_service.quad_tree);
+            let _ = viz_tx.send(json_state); // Envoi au thread WebSocket
+            last_viz_update = Instant::now();
+        }
+
         let elapsed = frame_start.elapsed();
         if elapsed < target_tick_duration {
             std::thread::sleep(target_tick_duration - elapsed);
@@ -167,12 +184,13 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) ->
                 spatial_service.process_position_update(update)
             }
             Some(CustomServerPacket::HandoffAccept(update)) => {
+                println!("handoff_accept");
                 spatial_service.process_handoff_accept(update)
             }
             Some(CustomServerPacket::PlayerJoinUpdate(update)) => {
                 spatial_service.process_player_join(update)
             }
-            Some(CustomServerPacket::ServerHealthCheck(update)) => {
+            Some(CustomServerPacket::ServerHeartBeat(update)) => {
                 spatial_service.process_server_health_check(update)
             }
             None => {

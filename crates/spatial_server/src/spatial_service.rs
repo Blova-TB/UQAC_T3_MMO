@@ -1,11 +1,12 @@
-﻿use crate::client_id::ClientId;
+﻿use std::time::Instant;
+use crate::client_id::ClientId;
 use crate::network::PeerType;
 use crate::quad_tree::{QuadTree, Rect};
 use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHealthCheck, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer};
+use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer};
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
@@ -54,12 +55,13 @@ impl SpatialService {
     }
 
     pub fn process_player_join(
-        &self,
+        &mut self,
         update_data: PlayerJoinUpdate,
     ) -> Option<Vec<(PeerType, Bytes)>> {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
+        println!("client_id: {:?}", client_id);
         let pos = update_data.pos;
 
         let Some(shard_id) = self.quad_tree.shard_id_for(pos) else {
@@ -69,6 +71,12 @@ impl SpatialService {
             );
             return None;
         };
+
+        if self.quad_tree.insert_player(client_id, pos).is_none() {
+            println!("⚠️ Avertissement : Échec de l'insertion initiale du joueur dans le QuadTree.");
+        }
+
+        self.client_to_shards.insert(client_id, (shard_id, Instant::now()));
 
         let player_spawn = SpawnPlayerShard {
             shard_id: shard_id.into(),
@@ -193,7 +201,7 @@ impl SpatialService {
 
     pub fn process_server_health_check(
         &mut self,
-        update_data: ServerHealthCheck,
+        update_data: ServerHeartBeat,
     ) -> Option<Vec<(PeerType, Bytes)>> {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
