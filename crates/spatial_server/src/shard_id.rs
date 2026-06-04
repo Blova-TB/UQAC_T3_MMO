@@ -102,7 +102,24 @@ impl ShardId {
         parent_val |= ((depth - 1) as u32) << Self::DEPTH_SHIFT;
 
         Some(Self(CustomId::new_unchecked(IdType::Server, parent_val)))
+    }
+
+    pub fn is_ancestor_of(self, other: Self) -> bool {
+        let self_depth = self.depth();
+        let other_depth = other.depth();
+
+        if self_depth >= other_depth {
+            return false; // Un shard ne peut pas être l'ancêtre d'un autre shard de même profondeur ou plus profond
         }
+
+        // on compare les morceaux des id
+        let shift = Self::DEPTH_SHIFT - (self_depth << 1);
+        ((self.0.value() ^ other.0.value()) & Self::QUADRANT_MASK) >> shift == 0
+    }
+
+    pub fn is_descendant_of(self, other: Self) -> bool {
+        other.is_ancestor_of(self)
+    }
 }
 
 // L'affichage de debug reste identique, ce qui est très pratique

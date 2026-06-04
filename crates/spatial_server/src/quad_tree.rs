@@ -37,7 +37,7 @@ pub struct QuadTree {
     pub children: Option<Box<[QuadTree; 4]>>,
     pub players: AHashMap<ClientId, Vec2<f32>>, // client_id -> position
     pub server_occupation: Option<u8>,
-    pub last_subdivide_time: Option<std::time::Instant>,
+    pub creation_date: std::time::Instant,
 }
 
 impl QuadTree {
@@ -50,7 +50,7 @@ impl QuadTree {
             shard_id: Some(shard_id),
             players: AHashMap::new(),
             server_occupation: None,
-            last_subdivide_time: None,
+            creation_date: std::time::Instant::now(),
         }
     }
 
@@ -119,6 +119,11 @@ impl QuadTree {
         self.shard_id
     }
 
+    pub fn hard_update_player_position(&mut self, client_id: ClientId, shard_id: ShardId, new_pos: Vec2<f32>) -> Option<Vec2<f32>> {
+        let current_node = self.get_shard_by_id_mut(shard_id)?;
+        current_node.players.insert(client_id, new_pos)
+    }
+
     pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<()> {
         let mut current_node = self;
 
@@ -130,7 +135,7 @@ impl QuadTree {
         Some(())
     }
 
-    pub fn subdivide_quad_tree(&mut self) -> Vec<(ClientId, ShardId, Vec2<f32>)> {
+    pub fn subdivide_quad_tree(&mut self) -> (Vec<(ClientId, ShardId, Vec2<f32>)>,Vec<(ClientId,Vec2<f32>)>) {
         let center = self.bounds.center();
         let min = self.bounds.min;
         let max = self.bounds.max;
@@ -163,24 +168,26 @@ impl QuadTree {
         let mut children = Box::new([tl, tr, bl, br]);
 
         let mut player_moved: Vec<(ClientId, ShardId, Vec2<f32>)> = Vec::new(); // <-- Utilisation de ClientId
-
+        let mut player_loss: Vec<(ClientId, Vec2<f32>)> = Vec::new();
         for (id, pos) in self.players.drain() {
-            for child in children.iter_mut() {
-                if child.bounds.contains(pos) {
-                    child.players.insert(id, pos);
-                    if let Some(tiprout) = child.shard_id {
-                        player_moved.push((id, tiprout, pos));
-                    }
-                    break;
+            if let Some(child) = children.iter_mut().find(|c| c.bounds.contains(pos)) {
+                child.players.insert(id, pos);
+                if let Some(new_shard_id) = child.shard_id {
+                    player_moved.push((id, new_shard_id, pos));
+                } else {
+                    player_loss.push((id, pos));
                 }
+            } else {
+                player_loss.push((id, pos));
             }
         }
 
         self.players.clear();
         self.children = Some(children);
         self.shard_id = None;
+        self.creation_date = std::time::Instant::now();
 
-        player_moved
+        (player_moved,player_loss)
     }
 
     pub fn merge_quad_tree(&mut self, shard_id: ShardId) -> (Vec<ClientId>, AHashSet<ShardId>){
@@ -195,6 +202,7 @@ impl QuadTree {
 
         self.shard_id = Some(shard_id);
         self.children = None;
+        self.creation_date = std::time::Instant::now();
 
         player_moved
     }
@@ -246,9 +254,12 @@ impl QuadTree {
         }
     }
 
-    pub fn get_occupation_somme(&self) -> u32 {
+    pub fn get_occupation_somme(&self, min_elapsed_time: f32) -> u32 {
+        if self.creation_date.elapsed() < std::time::Duration::from_secs_f32(min_elapsed_time) {
+            return 100;
+        }
         if let Some(children) = &self.children {
-            children.iter().map(|child| child.get_occupation_somme()).sum()
+            children.iter().map(|child| child.get_occupation_somme(min_elapsed_time)).sum()
         } else {
             self.server_occupation.unwrap_or(100) as u32
         }
