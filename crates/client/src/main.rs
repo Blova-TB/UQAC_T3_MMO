@@ -354,6 +354,8 @@ fn poll_gatekeeper_request(
                                         port,
                                     });
                                     next_state.set(AppState::Connecting);
+                                    //todo debug
+                                    println!(">>> DEBUG: Connecting ...");
                                 }
 
 
@@ -408,6 +410,8 @@ fn handle_connection_handshake(
 
                     if state.peer.send(&conn, &stream, handshake.to_bytes()).is_ok() {
                         next_state.set(AppState::InGame);
+                        //todo debug
+                        println!(">>> DEBUG: Handshake envoyé avec succès, passage en InGame");
                     } else {
                         exit.write(AppExit::Error(std::num::NonZeroU8::new(1).unwrap()));
                     }
@@ -431,9 +435,6 @@ fn handle_ingame_network(
     while let Ok(Some(event)) = state.peer.poll() {
         match event {
             GameNetworkEvent::Message { data, .. } => {
-                // Utilisation du trait défini dans shared::models
-                use shared::models::ServerBinaryPacket;
-
                 if let Some(msg) = ServerSyncMessage::try_from_bytes(data) {
                     ev_snapshot.write(NetworkSnapshotEvent { players: msg.players });
                 }
