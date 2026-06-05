@@ -49,12 +49,26 @@ impl Default for BrokerState {
 }
 
 impl BrokerState {
-    pub fn handle_disconnect(&mut self, conn: GameConnection) {
+    pub fn handle_disconnect(&mut self, peer: &mut GamePeer, conn: GameConnection) {
         if let Some(client_id) = self.conn_to_client.remove(&conn) {
+
+            let packet = ClientLeft {
+                client_id: CustomId::from(client_id),
+            }.to_bytes();
+
+            if let Some(spatial_conn) = &self.spatial_server_conn {
+                if let Some(spatial_stream) = &self.spatial_server_stream {
+                    let _ = peer.send(spatial_conn, spatial_stream, packet);
+                }
+            }
+
+            let _ = self.routing_table.unsubscribe_all(client_id);
+            self.routing_table.remove_topic(client_id);
+
             self.client_to_conn.remove(&client_id);
             self.client_streams.remove(&client_id);
-            self.routing_table.unsubscribe_all(client_id);
-            info!("👤 Client {} déconnecté et nettoyé de la table de routage.", client_id);
+
+            info!("👤 Client {} déconnecté. Spatial Server notifié.", client_id);
             return;
         }
 
@@ -115,7 +129,7 @@ fn main() {
 fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: &mut GamePeer) {
     match event {
         GameNetworkEvent::Disconnected(conn) => {
-            state.handle_disconnect(conn);
+            state.handle_disconnect(peer, conn);
         }
 
         GameNetworkEvent::Message { connection, stream, data } => {
@@ -176,26 +190,18 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
 
                 Publish::TAG => {
                     let Some(pkt) = Publish::try_from_bytes(data) else { return; };
+
                     let broadcast = Broadcast { payload: pkt.payload };
                     let final_msg = broadcast.to_bytes();
                     let topic_u32: u32 = pkt.topic_id.into();
 
                     if let Some(subscribers) = state.routing_table.get_subscribers(&topic_u32) {
-                        for client_id in subscribers {
-                            if let Some(client_conn) = state.client_to_conn.get(client_id) {
+                        for &sub_id in subscribers {
+                            if let Some(client_conn) = state.client_to_conn.get(&sub_id) {
                                 let _ = peer.send(client_conn, &stream, final_msg.clone());
                             }
-                        }
-                    }
-                }
-
-                ClientInput::TAG => {
-                    let Some(pkt) = ClientInput::try_from_bytes(data.clone()) else { return; };
-                    let topic_id = pkt.client_id.into();
-                    if let Some(subs) = state.routing_table.get_subscribers(&topic_id) {
-                        for &sub_id in subs {
-                            if let Some(conn) = state.shard_conns.get(&sub_id) {
-                                let _ = peer.send(conn, state.shard_streams.get(&sub_id).unwrap(), data.clone());
+                            else if let Some(shard_conn) = state.shard_conns.get(&sub_id) {
+                                let _ = peer.send(shard_conn, &stream, final_msg.clone());
                             }
                         }
                     }
@@ -203,8 +209,12 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
 
                 SpawnPlayerShard::TAG => {
                     let Some(pkt) = SpawnPlayerShard::try_from_bytes(data.clone()) else { return; };
-                    let shard_id = pkt.shard_id.into();
-                    state.routing_table.subscribe(pkt.client_id.into(), shard_id);
+                    let shard_id: u32 = pkt.shard_id.into();
+                    let client_id: u32 = pkt.client_id.into();
+
+                    state.routing_table.subscribe(client_id, shard_id);
+                    state.routing_table.subscribe(shard_id, client_id);
+
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
                         let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
                     }
