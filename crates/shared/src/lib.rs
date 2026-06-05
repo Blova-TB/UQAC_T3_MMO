@@ -7,3 +7,4 @@ pub mod models;
 pub mod custom_id;
 pub mod web_models;
 pub mod web_models_tools;
+pub mod game_protocol;

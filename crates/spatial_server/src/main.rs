@@ -178,7 +178,6 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) ->
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match CustomServerPacket::try_from_bytes(raw_bytes) {
             Some(CustomServerPacket::ServerSpawned(update)) => {
-                println!("server_spawned");
                 spatial_service.process_server_spawned(update)
             }
             Some(CustomServerPacket::PositionUpdate(update)) => {
@@ -191,8 +190,11 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) ->
             Some(CustomServerPacket::PlayerJoinUpdate(update)) => {
                 spatial_service.process_player_join(update)
             }
+            Some(CustomServerPacket::ClientLeft(update)) => {
+                spatial_service.process_player_left(update)
+            }
             Some(CustomServerPacket::ServerHeartBeat(update)) => {
-                spatial_service.process_server_health_check(update)
+                spatial_service.process_server_heartbeat(update)
             }
             None => {
                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu du Broker.");
