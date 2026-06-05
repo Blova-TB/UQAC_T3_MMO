@@ -5,3 +5,5 @@ pub mod network;
 pub mod constants;
 pub mod models;
 pub mod custom_id;
+pub mod web_models;
+pub mod web_models_tools;
