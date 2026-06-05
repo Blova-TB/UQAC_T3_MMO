@@ -1,8 +1,7 @@
-﻿pub use crate::custom_id::CustomId;
-pub use crate::models_trait_and_macro::PlayerData;
-pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
+pub use crate::custom_id::CustomId;
+pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket, PlayerData};
 use crate::{define_packet, define_packet_router};
-use mathtools::Vec2;
+pub use mathtools::Vec2;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -34,9 +33,10 @@ define_packet_router! {
         SpawnServer(SpawnServer),
         ServerSpawned(ServerSpawned),
         ShutdownServer(ShutdownServer),
-        ServerHealthCheck(ServerHealthCheck),
+        ServerHeartBeat(ServerHeartBeat),
         AssignShard(AssignShard),
         SpawnPlayerShard(SpawnPlayerShard),
+        RefuseClient(RefuseClient),
     }
 }
 
@@ -169,7 +169,7 @@ define_packet! {
 
 // envoyé par le shard notamment au spatial pour la gestion du QuadTree (merge/split)
 define_packet! {
-    ServerHealthCheck(0x31) {
+    ServerHeartBeat(0x31) {
         shard_id: CustomId,
         occupancy: u8,
     }
@@ -210,6 +210,12 @@ define_packet! {
 define_packet! {
     ServerSyncMessage(0x42) {
         players: Vec<PlayerData>,
+    }
+}
+
+define_packet!{
+    RefuseClient(0x42) {
+        client_id: CustomId,
     }
 }
 

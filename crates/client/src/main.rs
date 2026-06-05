@@ -5,9 +5,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use tokio::runtime::Runtime;
 use std::collections::HashMap;
 use std::time::Duration;
-
-// --- Imports de votre crate 'shared' ---
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStreamReliability};
+use bevy::tasks::IoTaskPool;
+use bitcode::{Decode, Encode};
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use shared::models::{BrokerHandshakeClient, ServerSyncMessage, PlayerData, ServerBinaryPacket};
 use shared::web_models::Claims;
@@ -63,6 +63,19 @@ pub struct ClientState {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
 }
+
+// à déplacer ////////////
+#[derive(Encode, Decode)]
+pub struct ServerSyncMessage {
+    pub players: Vec<PlayerPositionData>,
+}
+
+#[derive(Encode, Decode)]
+pub struct PlayerPositionData {
+    pub entity_bits: u64,
+    pub position: [f32; 2],
+}
+////////////////////////
 
 #[derive(Resource)]
 pub struct GameAssets {

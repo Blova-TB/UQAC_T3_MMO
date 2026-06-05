@@ -13,8 +13,7 @@ use std::time::Duration;
 use std::collections::HashMap;
 use uuid::Uuid;
 use futures::StreamExt;
-use bytes::BufMut; // Pour forger le paquet AssignShard
-use shared::models::{SpawnServer, ServerBinaryPacket};
+use shared::models::{SpawnServer, AssignShard, ServerBinaryPacket};
 
 #[derive(Deserialize)]
 pub struct HeartbeatPayload {
@@ -194,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if data.is_empty() { continue; }
                                 let tag = data[0];
 
-                                // On intercepte le Tag 0x30 (SpawnServer)
+                                // On intercepte le Tag SpawnServer
                                 if tag == SpawnServer::TAG {
                                     if let Some(spawn_req) = SpawnServer::try_from_bytes(data) {
                                         // Extraction de l'ID (u32 ou CustomId selon ton modèle)
@@ -208,14 +207,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     // 🚀 NOUVEAU : On récupère le flux fiable que le serveur a ouvert !
                                                     if let Some(out_stream) = server_streams.get(&conn_uuid) {
 
-                                                        let mut assign_msg = bytes::BytesMut::with_capacity(5);
-                                                        assign_msg.put_u8(0x40); // Tag AssignShard
-                                                        assign_msg.put_u32_le(shard_raw_id);
+                                                        // ✅ CORRECTION : On utilise le modèle partagé au lieu de forger les bytes à la main !
+                                                        let assign_packet = AssignShard {
+                                                            shard_id: shared::custom_id::CustomId::from(shard_raw_id),
+                                                        };
 
                                                         let target_server_conn = shared::network::GameConnection { connection_id: conn_uuid };
 
-                                                        // On utilise out_stream au lieu d'en recréer un
-                                                        if orchestrator_peer.send(&target_server_conn, out_stream, assign_msg.freeze()).is_ok() {
+                                                        // On envoie directement le packet sérialisé par ta macro
+                                                        if orchestrator_peer.send(&target_server_conn, out_stream, assign_packet.to_bytes()).is_ok() {
                                                             println!("🎯 [Orchestrator] Shard {} assignée avec succès au serveur conteneur {}", shard_raw_id, chosen_server.server_id);
 
                                                             let updated_info = ServerInfo {
