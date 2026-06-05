@@ -7,7 +7,7 @@ use crate::{ServerState, orchestrator_plugin::AssignedShard};
 use crate::config::ServerConfig;
 use crate::player::Player;
 
-use shared::constants::STREAM_PHYSICS;
+use shared::game_protocol::{LogicalStream, WorldSyncPayload};
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 
@@ -182,24 +182,28 @@ fn broadcast_sync_to_clients(
     let Some(conn) = &broker.connection else { return };
     if query.is_empty() { return; }
 
-    let mut players_data = Vec::with_capacity(query.iter().len());
+    let mut entities_data = Vec::with_capacity(query.iter().len());
     for (transform, client) in query.iter() {
         let pos = transform.translation.truncate();
+        let client_id: u32 = client.id.into();
 
-        players_data.push(PlayerData {
-            client_id: client.id,
-            pos: MathVec2::new(pos.x, pos.y),
-        });
+        entities_data.push((client_id, (pos.x, pos.y)));
     }
 
-    let sync_packet = ServerSyncMessage { players: players_data };
+    let sync_payload = WorldSyncPayload {
+        entities: entities_data
+    };
+
+    let encoded_payload = bitcode::encode(&sync_payload);
 
     let publish_packet = Publish {
         topic_id: CustomId::from(broker.topic),
-        payload: sync_packet.to_bytes().to_vec(),
+        payload: encoded_payload,
     };
 
-    let stream = GameStream::new(STREAM_PHYSICS, GameStreamReliability::Unreliable);
+    let stream_id = LogicalStream::WorldSync as u16;
+    let stream = GameStream::new(stream_id, GameStreamReliability::Unreliable);
+
     let _ = broker.peer.send(conn, &stream, publish_packet.to_bytes());
 }
 
@@ -220,7 +224,7 @@ fn send_spatial_updates(
                 pos: MathVec2::new(pos.x, pos.y),
             };
 
-            let stream = GameStream::new(STREAM_PHYSICS, GameStreamReliability::Unreliable);
+            let stream = GameStream::new(0, GameStreamReliability::Unreliable);
             let _ = broker.peer.send(conn, &stream, packet.to_bytes());
         }
     }
@@ -249,7 +253,7 @@ fn send_broker_heartbeat(
             occupancy: occupancy_percent,
         };
 
-        let stream = GameStream::new(STREAM_PHYSICS, GameStreamReliability::Unreliable);
+        let stream = GameStream::new(0, GameStreamReliability::Unreliable);
         let _ = broker.peer.send(conn, &stream, packet.to_bytes());
     }
 }
