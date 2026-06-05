@@ -48,6 +48,49 @@ impl Default for BrokerState {
     }
 }
 
+impl BrokerState {
+    pub fn handle_disconnect(&mut self, conn: GameConnection) {
+        if let Some(client_id) = self.conn_to_client.remove(&conn) {
+            self.client_to_conn.remove(&client_id);
+            self.client_streams.remove(&client_id);
+            self.routing_table.unsubscribe_all(client_id);
+            info!("👤 Client {} déconnecté et nettoyé de la table de routage.", client_id);
+            return;
+        }
+
+        if self.spatial_server_conn.as_ref() == Some(&conn) {
+            self.spatial_server_conn = None;
+            self.spatial_server_stream = None;
+            warn!("🗺️ Spatial Server déconnecté !");
+            return;
+        }
+
+        let disconnected_shard_id = self.shard_conns.iter()
+            .find_map(|(&id, c)| (c == &conn).then_some(id));
+
+        if let Some(shard_id) = disconnected_shard_id {
+            if let Some(orphaned_clients) = self.routing_table.remove_topic(shard_id) {
+                if !orphaned_clients.is_empty() {
+                    warn!(
+                        "⚠️ Shard {} déconnectée de force ! {} joueurs orphelins : {:?}",
+                        shard_id, orphaned_clients.len(), orphaned_clients
+                    );
+                }
+            }
+
+            self.routing_table.unsubscribe_all(shard_id);
+
+            self.shard_conns.remove(&shard_id);
+            self.shard_streams.remove(&shard_id);
+
+            info!("🧩 Shard {} déconnectée et nettoyée.", shard_id);
+            return;
+        }
+
+        warn!("❓ Déconnexion d'une entité non répertoriée dans le BrokerState.");
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt::init();
     info!("🚀 Démarrage du Broker PubSub Optimisé...");
@@ -72,14 +115,7 @@ fn main() {
 fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: &mut GamePeer) {
     match event {
         GameNetworkEvent::Disconnected(conn) => {
-            if let Some(client_id) = state.conn_to_client.remove(&conn) {
-                state.client_to_conn.remove(&client_id);
-                state.client_streams.remove(&client_id);
-                state.routing_table.unsubscribe_all(client_id);
-                info!("👤 Client {} déconnecté et nettoyé.", client_id);
-            }
-            state.shard_conns.retain(|_, v| v != &conn);
-            if Some(conn) == state.spatial_server_conn { state.spatial_server_conn = None; }
+            state.handle_disconnect(conn);
         }
 
         GameNetworkEvent::Message { connection, stream, data } => {

@@ -37,6 +37,7 @@ define_packet_router! {
         AssignShard(AssignShard),
         SpawnPlayerShard(SpawnPlayerShard),
         RefuseClient(RefuseClient),
+        ClientLeft(ClientLeft),
     }
 }
 

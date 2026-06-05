@@ -6,9 +6,7 @@ use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate,
-                     PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty,
-                     SpawnPlayerShard, SpawnServer, RefuseClient};
+use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer, RefuseClient, ClientLeft};
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
@@ -109,6 +107,13 @@ impl SpatialService {
         outgoing_packets.push((PeerType::Broker, player_spawn.to_bytes()));
 
         Some(outgoing_packets)
+    }
+
+    pub fn process_player_left(
+        &mut self,
+        update_data: ClientLeft,
+    ) -> Option<Vec<(PeerType, Bytes)>> {
+        todo!()
     }
 
     pub fn process_position_update(
@@ -212,7 +217,7 @@ impl SpatialService {
         None
     }
 
-    pub fn process_server_health_check(
+    pub fn process_server_heartbeat(
         &mut self,
         update_data: ServerHeartBeat,
     ) -> Option<Vec<(PeerType, Bytes)>> {

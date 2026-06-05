@@ -37,4 +37,20 @@ impl OptimizedRoutingTable {
     pub fn get_subscribers(&self, topic: &u32) -> Option<&AHashSet<u32>> {
         self.topic_subscribers.get(topic)
     }
+
+    pub fn remove_topic(&mut self, topic: u32) -> Option<AHashSet<u32>> {
+
+        let subscribers = self.topic_subscribers.remove(&topic)?;
+
+        for entity_id in &subscribers {
+            if let Some(topics) = self.entity_subscriptions.get_mut(entity_id) {
+                topics.remove(&topic);
+                if topics.is_empty() {
+                    self.entity_subscriptions.remove(entity_id);
+                }
+            }
+        }
+
+        Some(subscribers)
+    }
 }
