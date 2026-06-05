@@ -162,9 +162,6 @@ fn main() {
 fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match CustomServerPacket::try_from_bytes(raw_bytes) {
-            Some(CustomServerPacket::ServerSpawned(update)) => {
-                spatial_service.process_server_spawned(update)
-            }
             None => {
                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu de l'Orchestrateur.");
                 None
@@ -180,6 +177,10 @@ fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialServi
 fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match CustomServerPacket::try_from_bytes(raw_bytes) {
+            Some(CustomServerPacket::ServerSpawned(update)) => {
+                println!("server_spawned");
+                spatial_service.process_server_spawned(update)
+            }
             Some(CustomServerPacket::PositionUpdate(update)) => {
                 spatial_service.process_position_update(update)
             }

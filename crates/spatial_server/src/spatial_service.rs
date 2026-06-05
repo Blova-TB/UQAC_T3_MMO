@@ -6,7 +6,9 @@ use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer};
+use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate,
+                     PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty,
+                     SpawnPlayerShard, SpawnServer, RefuseClient};
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
@@ -20,6 +22,7 @@ pub struct SpatialService {
     pub occupation_to_merge: u8,
     pub time_for_merge_after_subdivide: f32,
     pub hysteresis_time: f32,
+    pub is_root_initialized: bool,
 }
 
 impl SpatialService {
@@ -51,6 +54,7 @@ impl SpatialService {
             occupation_to_merge,
             time_for_merge_after_subdivide,
             hysteresis_time,
+            is_root_initialized: false,
         }
     }
 
@@ -62,6 +66,15 @@ impl SpatialService {
 
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
         println!("client_id: {:?}", client_id);
+
+        if !self.is_root_initialized {
+            let refuse_client = RefuseClient {
+                client_id: client_id.into()
+            };
+            outgoing_packets.push((PeerType::Broker, refuse_client.to_bytes()));
+            return Some(outgoing_packets)
+        }
+
         let pos = update_data.pos;
 
         let Some(shard_id) = self.quad_tree.shard_id_for(pos) else {
@@ -316,6 +329,12 @@ impl SpatialService {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
+
+        if shard_id == ShardId::ROOT && !self.is_root_initialized {
+            self.is_root_initialized = true;
+            println!("Shard ROOT is initialized.");
+            return None;
+        }
 
         if let Some(parent_shard_id) = shard_id.get_parent_shard_id()
             && let Some(children) = self.shard_waiting_for_subdivide.get_mut(&parent_shard_id)

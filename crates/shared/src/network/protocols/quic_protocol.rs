@@ -234,6 +234,13 @@ impl GameSocketBackend for QuicBackend {
                                 self.unreliable_send_streams.retain(|x| x != &key);
                                 let _ = event_tx.send(GameNetworkEvent::StreamClosed(connection.into(), stream.into()));
                             },
+                            BackendCommand::Disconnect { connection } => {
+                                if let Some(conn) = self.connections.remove(&connection) {
+                                    conn.close(0u32.into(), b"Kicked by server");
+                                    self.reliable_send_streams.retain(|(uuid, _), _| uuid != &connection);
+                                    self.unreliable_send_streams.retain(|(uuid, _)| uuid != &connection);
+                                }
+                            }
                         }
                     }
                 }

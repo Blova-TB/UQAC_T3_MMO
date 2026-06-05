@@ -23,6 +23,7 @@ pub struct Claims {
 struct BrokerState {
     conn_to_client: AHashMap<GameConnection, u32>,
     client_to_conn: AHashMap<u32, GameConnection>,
+    client_streams: AHashMap<u32, GameStream>,
     routing_table: OptimizedRoutingTable,
 
     spatial_server_conn: Option<GameConnection>,
@@ -37,6 +38,7 @@ impl Default for BrokerState {
         Self {
             conn_to_client: AHashMap::new(),
             client_to_conn: AHashMap::new(),
+            client_streams: AHashMap::new(),
             routing_table: OptimizedRoutingTable::default(),
             spatial_server_conn: None,
             spatial_server_stream: None,
@@ -72,6 +74,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
         GameNetworkEvent::Disconnected(conn) => {
             if let Some(client_id) = state.conn_to_client.remove(&conn) {
                 state.client_to_conn.remove(&client_id);
+                state.client_streams.remove(&client_id);
                 state.routing_table.unsubscribe_all(client_id);
                 info!("👤 Client {} déconnecté et nettoyé.", client_id);
             }
@@ -93,6 +96,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         let client_id = token_data.claims.custom_id;
                         state.conn_to_client.insert(connection.clone(), client_id);
                         state.client_to_conn.insert(client_id, connection);
+                        state.client_streams.insert(client_id, stream.clone());
 
                         if let (Some(s_conn), Some(s_stream)) = (&state.spatial_server_conn, &state.spatial_server_stream) {
                             let _ = peer.send(s_conn, s_stream, PlayerJoinUpdate {
@@ -109,7 +113,14 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     let id = pkt.shard_id.into();
                     state.shard_conns.insert(id, connection);
                     state.shard_streams.insert(id, stream);
-                    //TODO prévenir le spatial server
+
+                    if let (Some(s_conn),Some(s_stream)) = (&state.spatial_server_conn, &state.spatial_server_stream) {
+                        let _ = peer.send(s_conn, s_stream, ServerSpawned {
+                            shard_id: CustomId::from(id)
+                        }.to_bytes());
+                    } else {
+                        warn!("⚠️ PositionUpdate ignoré : Spatial Server non connecté.");
+                    }
                 }
 
                 BrokerHandshakeSpatial::TAG => {
@@ -184,6 +195,33 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         let _ = peer.send(s_conn, &unreliable_stream, data);
                     } else {
                         warn!("⚠️ PositionUpdate ignoré : Spatial Server non connecté.");
+                    }
+                }
+
+                RefuseClient::TAG => {
+                    let Some(pkt) = RefuseClient::try_from_bytes(data.clone()) else {
+                        warn!("⚠️ Impossible de décoder le paquet RefuseClient");
+                        return;
+                    };
+
+                    let client_id: u32 = pkt.client_id.into();
+
+                    if let (Some(client_conn), Some(client_stream)) = (
+                        state.client_to_conn.get(&client_id).cloned(),
+                        state.client_streams.get(&client_id).cloned()
+                    ) {
+                        let _ = peer.send(&client_conn, &client_stream, data);
+
+                        state.client_to_conn.remove(&client_id);
+                        state.client_streams.remove(&client_id);
+                        state.conn_to_client.remove(&client_conn);
+                        state.routing_table.unsubscribe_all(client_id);
+
+                        peer.disconnect(&client_conn).expect("échec fermeture connexion client");
+
+                        info!("🚫 Client {} refusé : paquet transmis en reliable, état nettoyé.", client_id);
+                    } else {
+                        warn!("⚠️ Tentative de refus pour le client {}, mais il est introuvable.", client_id);
                     }
                 }
 

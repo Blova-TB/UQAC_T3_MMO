@@ -36,6 +36,7 @@ define_packet_router! {
         ServerHeartBeat(ServerHeartBeat),
         AssignShard(AssignShard),
         SpawnPlayerShard(SpawnPlayerShard),
+        RefuseClient(RefuseClient),
     }
 }
 
@@ -206,6 +207,12 @@ define_packet! {
 define_packet!{
     ServerSyncMessage(0x41) {
         players: Vec<PlayerData>,
+    }
+}
+
+define_packet!{
+    RefuseClient(0x42) {
+        client_id: CustomId,
     }
 }
 

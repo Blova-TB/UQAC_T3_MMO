@@ -11,6 +11,7 @@ pub enum BackendCommand {
     Send { connection: Uuid, stream: GameStream, data: Bytes },
     CreateStream { connection: Uuid, stream: u16, reliability: GameStreamReliability },
     CloseStream { connection: Uuid, stream: u16 },
+    Disconnect { connection: Uuid },
     Shutdown,
 }
 
@@ -181,5 +182,9 @@ impl GamePeer {
         let _ = self.send_cmd(BackendCommand::Shutdown);
         if let Some(h) = self.thread_handle.take() { let _ = h.join(); }
         Ok(())
+    }
+
+    pub fn disconnect(&self, conn: &GameConnection) -> Result<(), GameSocketError> {
+        self.send_cmd(BackendCommand::Disconnect { connection: conn.connection_id })
     }
 }
