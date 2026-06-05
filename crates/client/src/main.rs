@@ -5,9 +5,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use tokio::runtime::Runtime;
 use std::collections::HashMap;
 use std::time::Duration;
-use bevy::tasks::IoTaskPool;
-use bitcode::{Decode, Encode};
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use shared::models::{BrokerHandshakeClient, ServerSyncMessage, PlayerData, ServerBinaryPacket};
 use shared::web_models::Claims;
@@ -63,19 +61,6 @@ pub struct ClientState {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
 }
-
-// à déplacer ////////////
-#[derive(Encode, Decode)]
-pub struct ServerSyncMessage {
-    pub players: Vec<PlayerPositionData>,
-}
-
-#[derive(Encode, Decode)]
-pub struct PlayerPositionData {
-    pub entity_bits: u64,
-    pub position: [f32; 2],
-}
-////////////////////////
 
 #[derive(Resource)]
 pub struct GameAssets {
@@ -169,7 +154,7 @@ fn draw_auth_ui(
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .collapsible(false)
         .resizable(false)
-        .show(ctx, |ui| { // <-- Utilisez l'instance sécurisée `ctx` ici
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Username:");
                 ui.text_edit_singleline(&mut form.username);
@@ -217,28 +202,41 @@ fn spawn_auth_request(
     let username = user.to_string();
     let password = pass.to_string();
 
+    //todo debug
+    println!(">>> DEBUG:Lancement de la requête {} pour l'utilisateur '{}' avec le password {}", if is_register { "d'inscription" } else { "de connexion" }, username, password);
+
     let join_handle = rt.0.spawn(async move {
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
 
-        let res = if is_register {
-            client.post("http://127.0.0.1:3000/register")
-                .json(&serde_json::json!({ "username": username, "password": password }))
-                .send().await
-        } else {
-            client.post("http://127.0.0.1:3000/login")
-                .basic_auth(username, Some(password))
-                .send().await
-        };
+        let res =
+            if is_register {
+                client.post("http://127.0.0.1:3000/register")
+                    .json(&serde_json::json!({ "username": username, "password": password }))
+                    .send().await
+            } else {
+                client.post("http://127.0.0.1:3000/login")
+                    .basic_auth(username, Some(password))
+                    .send().await
+            };
 
         match res {
             Ok(response) => {
                 let status = response.status().as_u16();
                 let text = response.text().await.unwrap_or_default();
+                //todo debug
+                println!(">>> DEBUG:Réponse du serveur ({}): {}", status, text); //todo debug
                 Ok((status, text))
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) =>{
+                //todo debug
+                println!(">>> DEBUG:Erreur lors de la requête HTTP: {}", e); //todo debug
+                Err(e.to_string())
+            }
         }
     });
+
+    //todo debug
+    println!(">>> DEBUG:result du spawn_auth_request: {:?}", join_handle);
 
     let task = IoTaskPool::get().spawn(async move {
         join_handle.await.unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
@@ -339,13 +337,26 @@ fn poll_gatekeeper_request(
 
                             let parts: Vec<&str> = broker_addr.split(':').collect();
                             if parts.len() == 2 && session.session_token.len() > 0 {
+
+                                let mut target_ip = parts[0].to_string();
+
+                                //todo debug
+                                if target_ip.starts_with("172.") || target_ip.starts_with("10.") {
+                                    println!(">>> DEBUG: IP interne Docker détectée ({}), forçage vers 127.0.0.1", target_ip);
+                                    target_ip = "127.0.0.1".to_string();
+                                }
+
                                 if let Ok(port) = parts[1].parse::<u16>() {
+                                    //todo debug
+                                    println!(">>> DEBUG: Cible finale du Client -> {}:{}", target_ip, port);
                                     commands.insert_resource(TargetServer {
-                                        ip: parts[0].to_string(),
+                                        ip: target_ip,
                                         port,
                                     });
                                     next_state.set(AppState::Connecting);
                                 }
+
+
                             }
                         }
                         Err(_) => eprintln!("Erreur lors de la lecture du JSON du Gatekeeper."),
@@ -364,7 +375,12 @@ fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
     let backend = QuicBackend::new();
     let peer = GamePeer::new(backend);
 
-    peer.connect(&target.ip, target.port).expect("Échec de l'initialisation de la connexion QUIC");
+    println!(">>> DEBUG: Tentative de connexion QUIC (UDP) vers {}:{}", target.ip, target.port);
+
+    match peer.connect(&target.ip, target.port) {
+        Ok(_) => println!(">>> DEBUG: socket QUIC ouvert. En attente du Handshake"),
+        Err(e) => eprintln!(">>> ERREUR: Échec immédiat de la création du socket QUIC: {:?}", e),
+    }
 
     commands.insert_resource(ClientState {
         peer,
