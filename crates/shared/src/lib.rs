@@ -5,3 +5,4 @@ pub mod network;
 pub mod constants;
 pub mod models;
 pub mod custom_id;
+pub mod game_protocol;
