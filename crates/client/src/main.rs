@@ -1,42 +1,56 @@
-use bevy::app::ScheduleRunnerPlugin;
-use bevy::state::app::StatesPlugin;
 use bevy::prelude::*;
+use bevy::tasks::{block_on, poll_once, IoTaskPool, Task};
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use tokio::runtime::Runtime;
-use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use std::collections::HashMap;
 use std::time::Duration;
-use bevy::tasks::IoTaskPool;
 
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
+// --- Imports de votre crate 'shared' ---
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
-use shared::models::*;
+use shared::models::{BrokerHandshakeClient, ServerSyncMessage, PlayerData, ServerBinaryPacket};
+use shared::web_models::Claims;
 
-use rand::random;
+// --- Ressources ---
 
 #[derive(Resource)]
 pub struct TokioRuntime(pub Runtime);
 
 impl Default for TokioRuntime {
     fn default() -> Self {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Échec de l'initialisation du Runtime Tokio");
-        Self(rt)
+        Self(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Échec de l'initialisation du Runtime Tokio"),
+        )
     }
 }
 
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AppState {
     #[default]
-    GatekeeperLogin, // Étape 1 : Authentification HTTP Basic -> Récupération du JWT
-    GatekeeperFetch, // Étape 2 : Requête HTTP GET /server avec le JWT Bearer
-    Connecting,      // Étape 3 : Handshake QUIC (Tag 0x00) vers le Broker
-    InGame,          // Étape 4 : Réception de la simulation physique (Tag 0x04)
+    AuthMenu,        // Interface Egui Login/Register
+    GatekeeperFetch, // Requête GET /server
+    Connecting,      // Handshake QUIC
+    InGame,          // Boucle de jeu ECS
+}
+
+#[derive(Resource, Default)]
+pub struct AuthFormState {
+    pub username: String,
+    pub password: String,
+    pub error_message: Option<String>,
+    pub is_register_mode: bool,
 }
 
 #[derive(Resource)]
-pub struct GatekeeperToken(pub String);
+pub struct SessionData {
+    pub gatekeeper_token: String,
+    pub session_token: String,
+    pub custom_id: u32,
+}
 
 #[derive(Resource)]
 pub struct TargetServer {
@@ -51,28 +65,61 @@ pub struct ClientState {
 }
 
 #[derive(Resource)]
-pub struct LocalPlayerId(pub u32);
+pub struct GameAssets {
+    pub player_sprite: Handle<Image>,
+}
+
+// --- Composants ---
 
 #[derive(Component)]
-struct LoginTask(Task<Result<String, reqwest::Error>>);
+pub struct NetworkEntity(pub u32);
 
 #[derive(Component)]
-struct FetchServerTask(Task<Result<String, reqwest::Error>>);
+pub struct LocalPlayer;
+
+#[derive(Component)]
+struct HttpAuthTask(Task<Result<(u16, String), String>>);
+
+#[derive(Component)]
+struct FetchServerTask(Task<Result<(u16, String), String>>);
+
+// --- Events ---
+
+#[derive(Message)]
+pub struct NetworkSnapshotEvent {
+    pub players: Vec<PlayerData>,
+}
+
+// --- Point d'entrée ---
 
 fn main() {
     App::new()
-        .add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
-            Duration::from_secs_f64(1.0 / 60.0),
-        )))
-        .add_plugins(StatesPlugin)
-        .init_resource::<TokioRuntime>()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "MMO Client".into(),
+                resolution: bevy::window::WindowResolution::new(1280, 720),
+                present_mode: bevy::window::PresentMode::AutoNoVsync,
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(EguiPlugin::default())
         .init_state::<AppState>()
+        .init_resource::<TokioRuntime>()
+        .init_resource::<AuthFormState>()
+        .add_message::<NetworkSnapshotEvent>()
 
-        // Phase 1 : Login Gatekeeper
-        .add_systems(OnEnter(AppState::GatekeeperLogin), spawn_login_request)
-        .add_systems(Update, poll_login_request.run_if(in_state(AppState::GatekeeperLogin)))
+        .add_systems(Startup, setup_core)
 
-        // Phase 2 : Récupération de l'adresse du serveur (Broker)
+
+        // Phase 1 : Auth (UI Egui et Réseau)
+        // 🚀 L'interface graphique va dans le pass spécifique d'Egui
+        .add_systems(EguiPrimaryContextPass, draw_auth_ui.run_if(in_state(AppState::AuthMenu)))
+
+        // La logique HTTP reste dans l'Update global de Bevy
+        .add_systems(Update, poll_http_auth.run_if(in_state(AppState::AuthMenu)))
+
+        // Phase 2 : Fetch Server
         .add_systems(OnEnter(AppState::GatekeeperFetch), spawn_gatekeeper_request)
         .add_systems(Update, poll_gatekeeper_request.run_if(in_state(AppState::GatekeeperFetch)))
 
@@ -80,42 +127,117 @@ fn main() {
         .add_systems(OnEnter(AppState::Connecting), init_game_connection)
         .add_systems(Update, handle_connection_handshake.run_if(in_state(AppState::Connecting)))
 
-        // Phase 4 : En Jeu (Réception des Broadcasts)
-        .add_systems(Update, handle_ingame_network.run_if(in_state(AppState::InGame)))
+        // Phase 4 : In Game (Réseau + Synchro ECS)
+        .add_systems(Update, (handle_ingame_network, sync_players_state).run_if(in_state(AppState::InGame)))
 
         .run();
 }
 
-// --- Systèmes : Phase 1 (Gatekeeper Login) ---
+// --- Systèmes d'Initialisation ---
 
-fn spawn_login_request(mut commands: Commands, rt: Res<TokioRuntime>) {
-    println!("Client : Authentification auprès du Gatekeeper (POST /login)...");
-
-    let username = std::env::var("BOT_USER").unwrap_or_else(|_| "test_user".to_string());
-    let password = std::env::var("BOT_PASS").unwrap_or_else(|_| "password123".to_string());
-
-    let join_handle = rt.0.spawn(async move {
-        let client = reqwest::Client::new();
-        let res = client
-            .post("http://gatekeeper:3000/login")
-            .basic_auth(username, Some(password))
-            .send()
-            .await?;
-
-        res.text().await
+fn setup_core(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(Camera2d);
+    commands.insert_resource(GameAssets {
+        player_sprite: asset_server.load("circle.png"), // Assurez-vous que cet asset existe dans assets/
     });
-
-    let thread_pool = IoTaskPool::get();
-    let task = thread_pool.spawn(async move {
-        join_handle.await.expect("Le thread Tokio a crashé lors du login")
-    });
-
-    commands.spawn(LoginTask(task));
 }
 
-fn poll_login_request(
+// --- Phase 1 : Interface d'Authentification ---
+
+fn draw_auth_ui(
+    mut contexts: EguiContexts,
+    mut form: ResMut<AuthFormState>,
     mut commands: Commands,
-    mut q_task: Query<(Entity, &mut LoginTask)>,
+    rt: Res<TokioRuntime>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
+
+    egui::Window::new("GateKeeper Authentication")
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| { // <-- Utilisez l'instance sécurisée `ctx` ici
+            ui.horizontal(|ui| {
+                ui.label("Username:");
+                ui.text_edit_singleline(&mut form.username);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Password:");
+                ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+            });
+
+            if let Some(err) = &form.error_message {
+                ui.colored_label(egui::Color32::RED, err);
+            }
+
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                if form.is_register_mode {
+                    if ui.button("S'inscrire").clicked() {
+                        spawn_auth_request(&mut commands, &rt, &form.username, &form.password, true);
+                    }
+                    if ui.button("Aller à la connexion").clicked() {
+                        form.is_register_mode = false;
+                        form.error_message = None;
+                    }
+                } else {
+                    if ui.button("Se connecter").clicked() {
+                        spawn_auth_request(&mut commands, &rt, &form.username, &form.password, false);
+                    }
+                    if ui.button("Créer un compte").clicked() {
+                        form.is_register_mode = true;
+                        form.error_message = None;
+                    }
+                }
+            });
+        });
+}
+
+fn spawn_auth_request(
+    commands: &mut Commands,
+    rt: &TokioRuntime,
+    user: &str,
+    pass: &str,
+    is_register: bool,
+) {
+    let username = user.to_string();
+    let password = pass.to_string();
+
+    let join_handle = rt.0.spawn(async move {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
+
+        let res = if is_register {
+            client.post("http://127.0.0.1:3000/register")
+                .json(&serde_json::json!({ "username": username, "password": password }))
+                .send().await
+        } else {
+            client.post("http://127.0.0.1:3000/login")
+                .basic_auth(username, Some(password))
+                .send().await
+        };
+
+        match res {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let text = response.text().await.unwrap_or_default();
+                Ok((status, text))
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    });
+
+    let task = IoTaskPool::get().spawn(async move {
+        join_handle.await.unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
+    });
+
+    commands.spawn(HttpAuthTask(task));
+}
+
+fn poll_http_auth(
+    mut commands: Commands,
+    mut q_task: Query<(Entity, &mut HttpAuthTask)>,
+    mut form: ResMut<AuthFormState>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     for (entity, mut task) in &mut q_task {
@@ -123,56 +245,72 @@ fn poll_login_request(
             commands.entity(entity).despawn();
 
             match result {
-                Ok(token) => {
-                    if token.contains("Utilisateur non trouvé") || token.contains("Identifiants invalides") {
-                        eprintln!("Client : Échec d'authentification : {}", token);
-                        return;
+                Ok((status, body)) => {
+                    if status == 200 {
+                        if form.is_register_mode {
+                            form.error_message = Some("Inscription réussie. Connectez-vous.".into());
+                            form.is_register_mode = false;
+                        } else {
+                            match extract_unverified_claims(&body) {
+                                Some(claims) => {
+                                    commands.insert_resource(SessionData {
+                                        gatekeeper_token: body,
+                                        session_token: String::new(),
+                                        custom_id: claims.custom_id,
+                                    });
+                                    next_state.set(AppState::GatekeeperFetch);
+                                }
+                                None => form.error_message = Some("Token JWT invalide ou corrompu".into()),
+                            }
+                        }
+                    } else {
+                        form.error_message = Some(format!("Erreur {} : {}", status, body));
                     }
-                    println!("Client : Authentifié avec succès. Token JWT obtenu.");
-                    commands.insert_resource(GatekeeperToken(token));
-                    next_state.set(AppState::GatekeeperFetch);
                 }
-                Err(e) => {
-                    eprintln!("Client : Erreur réseau lors du login: {:?}", e);
-                }
+                Err(e) => form.error_message = Some(format!("Erreur réseau: {}", e)),
             }
         }
     }
 }
 
-// --- Systèmes : Phase 2 (Gatekeeper Fetch Server) ---
+fn extract_unverified_claims(token: &str) -> Option<Claims> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 { return None; }
+    let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
+    serde_json::from_slice(&payload).ok()
+}
+
+// --- Phase 2 : Gatekeeper Fetch ---
 
 fn spawn_gatekeeper_request(
     mut commands: Commands,
-    token: Res<GatekeeperToken>,
+    session: Res<SessionData>,
     rt: Res<TokioRuntime>
 ) {
-    println!("Client : Requête d'un serveur de jeu (GET /server avec JWT)...");
-
-    let jwt_token = token.0.clone();
+    let jwt_token = session.gatekeeper_token.clone();
 
     let join_handle = rt.0.spawn(async move {
-        let client = reqwest::Client::new();
-        let res = client
-            .get("http://gatekeeper:3000/server")
-            .bearer_auth(jwt_token)
-            .send()
-            .await?;
-
-        res.text().await
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
+        match client.get("http://127.0.0.1:3000/server").bearer_auth(jwt_token).send().await {
+            Ok(res) => {
+                let status = res.status().as_u16();
+                let text = res.text().await.unwrap_or_default();
+                Ok((status, text))
+            }
+            Err(e) => Err(e.to_string()),
+        }
     });
 
-    let thread_pool = IoTaskPool::get();
-    let task = thread_pool.spawn(async move {
-        join_handle.await.expect("Le thread Tokio a crashé lors du fetch serveur")
+    let task = IoTaskPool::get().spawn(async move {
+        join_handle.await.unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
     });
-
     commands.spawn(FetchServerTask(task));
 }
 
 fn poll_gatekeeper_request(
     mut commands: Commands,
     mut q_task: Query<(Entity, &mut FetchServerTask)>,
+    mut session: ResMut<SessionData>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     for (entity, mut task) in &mut q_task {
@@ -180,58 +318,40 @@ fn poll_gatekeeper_request(
             commands.entity(entity).despawn();
 
             match result {
-                Ok(response_text) => {
-                    println!("Client : Réponse du Gatekeeper -> {}", response_text);
-
-                    // 🚀 NOUVEAU : On parse le JSON renvoyé par le Gatekeeper
+                Ok((200, response_text)) => {
                     match serde_json::from_str::<serde_json::Value>(&response_text) {
                         Ok(json) => {
-                            // Extraction de l'adresse et du nouveau token
                             let broker_addr = json["broker_addr"].as_str().unwrap_or("");
-                            let session_token = json["session_token"].as_str().unwrap_or("");
+                            session.session_token = json["session_token"].as_str().unwrap_or("").to_string();
 
                             let parts: Vec<&str> = broker_addr.split(':').collect();
-                            if parts.len() == 2 {
+                            if parts.len() == 2 && session.session_token.len() > 0 {
                                 if let Ok(port) = parts[1].parse::<u16>() {
-
-                                    // 1. On sauvegarde l'IP et le Port du Broker
                                     commands.insert_resource(TargetServer {
                                         ip: parts[0].to_string(),
-                                        port
+                                        port,
                                     });
-
-                                    // 2. 🚀 On remplace le Token Web par le Token de Jeu !
-                                    commands.insert_resource(GatekeeperToken(session_token.to_string()));
-
                                     next_state.set(AppState::Connecting);
-                                } else {
-                                    eprintln!("Erreur : Port invalide retourné par le Gatekeeper : {}", parts[1]);
                                 }
-                            } else {
-                                eprintln!("Erreur : Format d'adresse réseau invalide : {}", broker_addr);
                             }
                         }
-                        Err(e) => {
-                            eprintln!("Erreur lors de la lecture du JSON du Gatekeeper : {:?}", e);
-                        }
+                        Err(_) => eprintln!("Erreur lors de la lecture du JSON du Gatekeeper."),
                     }
                 }
-                Err(e) => {
-                    eprintln!("Client : Échec d'interrogation du Gatekeeper /server: {:?}", e);
-                }
+                Ok((status, err)) => eprintln!("Erreur Gatekeeper: {} - {}", status, err),
+                Err(e) => eprintln!("Erreur réseau Fetch: {}", e),
             }
         }
     }
 }
 
-// --- Systèmes : Phase 3 (Connexion QUIC & Handshake) ---
+// --- Phase 3 : Connexion QUIC ---
 
 fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
     let backend = QuicBackend::new();
     let peer = GamePeer::new(backend);
 
-    println!("Client : Établissement de la liaison QUIC vers {}:{}...", target.ip, target.port);
-    peer.connect(&target.ip, target.port).expect("Échec de l'initialisation de la connexion");
+    peer.connect(&target.ip, target.port).expect("Échec de l'initialisation de la connexion QUIC");
 
     commands.insert_resource(ClientState {
         peer,
@@ -240,116 +360,110 @@ fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
 }
 
 fn handle_connection_handshake(
-    mut commands: Commands,
-    token: Res<GatekeeperToken>,
     mut state: ResMut<ClientState>,
+    session: Res<SessionData>,
     mut next_state: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    loop {
-        match state.peer.poll() {
-            Ok(Some(event)) => match event {
-                // ÉTAPE 1 : La connexion brute est établie
-                GameNetworkEvent::Connected(conn) => {
-                    println!("Client : Connecté au Broker QUIC. Demande d'un flux fiable...");
-                    state.connection = Some(conn);
-                    let _ = state.peer.create_stream(conn, GameStreamReliability::Reliable);
-                }
+    while let Ok(Some(event)) = state.peer.poll() {
+        match event {
+            GameNetworkEvent::Connected(conn) => {
+                state.connection = Some(conn.clone());
+                let _ = state.peer.create_stream(conn, GameStreamReliability::Reliable);
+            }
+            GameNetworkEvent::StreamCreated(conn, stream) => {
+                if stream.is_reliable() {
+                    let handshake = BrokerHandshakeClient {
+                        jwt_token: session.session_token.as_bytes().to_vec(),
+                    };
 
-                // ÉTAPE 2 : La librairie nous confirme que le canal réseau est prêt
-                GameNetworkEvent::StreamCreated(conn, stream) => {
-                    if stream.is_reliable() {
-                        println!("Client : Flux fiable ouvert ! Envoi du JWT d'authentification...");
-
-                        // 🚀 NOUVEAU : On utilise notre paquet typé avec le Token !
-                        let handshake = BrokerHandshakeClient {
-                            jwt_token: token.0.as_bytes().to_vec(),
-                        };
-
-                        if let Err(e) = state.peer.send(&conn, &stream, handshake.to_bytes()) {
-                            eprintln!("Client : Échec de l'envoi du Handshake : {:?}", e);
-                        } else {
-                            println!("Client : Handshake JWT envoyé et garanti ! Passage en mode InGame.");
-                            next_state.set(AppState::InGame);
-                        }
+                    if state.peer.send(&conn, &stream, handshake.to_bytes()).is_ok() {
+                        next_state.set(AppState::InGame);
+                    } else {
+                        exit.write(AppExit::Error(std::num::NonZeroU8::new(1).unwrap()));
                     }
                 }
-
-                GameNetworkEvent::Disconnected(_) => {
-                    println!("Client : Déconnecté par le serveur durant le handshake.");
-                    exit.write(AppExit::Success);
-                }
-                GameNetworkEvent::Error { inner, .. } => {
-                    eprintln!("Client : Erreur protocole : {:?}", inner);
-                }
-                _ => {} // On ignore les autres events
-            },
-            Ok(None) => break,
-            Err(e) => {
-                eprintln!("Client : Erreur fatale de polling : {:?}", e);
-                break;
             }
+            GameNetworkEvent::Disconnected(_) => {
+                exit.write(AppExit::Success);
+            }
+            _ => {}
         }
     }
 }
 
-// --- Systèmes : Phase 4 (In Game Execution) ---
+// --- Phase 4 : Boucle en Jeu ---
 
 fn handle_ingame_network(
-    mut session: ResMut<ClientState>,
-    mut exit: MessageWriter<AppExit>
+    mut state: ResMut<ClientState>,
+    mut ev_snapshot: MessageWriter<NetworkSnapshotEvent>,
+    mut exit: MessageWriter<AppExit>,
 ) {
-    loop {
-        match session.peer.poll() {
-            Ok(Some(event)) => match event {
-                GameNetworkEvent::Message { mut data, .. } => {
-                    if data.is_empty() { continue; }
+    while let Ok(Some(event)) = state.peer.poll() {
+        match event {
+            GameNetworkEvent::Message { data, .. } => {
+                // Utilisation du trait défini dans shared::models
+                use shared::models::ServerBinaryPacket;
 
-                    let tag = data.get_u8();
-
-                    match tag {
-                        // TAG 0x04 : Broadcast venant du Broker
-                        0x04 => {
-                            if data.remaining() < 2 { continue; }
-
-                            // 1. Lire la taille du payload bitcode (en Little-Endian)
-                            let payload_len = data.get_u16_le() as usize;
-                            if data.remaining() < payload_len { continue; }
-
-                            // 2. Extraire les octets correspondants à la snapshot
-                            let inner_payload = data.copy_to_bytes(payload_len);
-
-                            // 3. Décoder la snapshot de la Shard
-                            if let Ok(sync_msg) = bitcode::decode::<ServerSyncMessage>(&inner_payload) {
-                                println!("--- State Sync Snapshot [{} Joueur(s) Visibles] ---", sync_msg.players.len());
-                                // Pour afficher les infos, tu peux dé-commenter :
-                                /*
-                                for player in sync_msg.players {
-                                    println!(
-                                        " > Entity ID: {:<10} | Position Translatée: [X: {:>6.2}, Y: {:>6.2}]",
-                                        player.entity_bits,
-                                        player.position[0],
-                                        player.position[1]
-                                    );
-                                }*/
-                            }
-                        }
-                        _ => {
-                            // On ignore les tags non gérés par le client pour le moment
-                        }
-                    }
+                if let Some(msg) = ServerSyncMessage::try_from_bytes(data) {
+                    ev_snapshot.write(NetworkSnapshotEvent { players: msg.players });
                 }
-                GameNetworkEvent::Disconnected(_) => {
-                    println!("Client : Session fermée par le Broker.");
-                    exit.write(AppExit::Success);
+            }
+            GameNetworkEvent::Disconnected(_) => {
+                exit.write(AppExit::Success);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn sync_players_state(
+    mut commands: Commands,
+    mut events: MessageReader<NetworkSnapshotEvent>,
+    mut q_players: Query<(Entity, &NetworkEntity, &mut Transform)>,
+    assets: Res<GameAssets>,
+    session: Res<SessionData>,
+) {
+    for event in events.read() {
+        let mut existing_entities: HashMap<u32, (Entity, Mut<Transform>)> = q_players
+            .iter_mut()
+            .map(|(e, net_id, transform)| (net_id.0, (e, transform)))
+            .collect();
+
+        for server_player in &event.players {
+            let pid = server_player.client_id.as_u32();
+
+            if let Some((_, transform)) = existing_entities.get_mut(&pid) {
+                // Interpolation recommandée pour le futur. Set direct pour l'instant.
+                transform.translation.x = server_player.pos.x;
+                transform.translation.y = server_player.pos.y;
+
+                existing_entities.remove(&pid);
+            } else {
+                let mut entity_cmds = commands.spawn((
+                    Sprite {
+                        image: assets.player_sprite.clone(),
+                        color: if pid == session.custom_id {
+                            Color::srgb(0.0, 1.0, 0.0)
+                        } else {
+                            Color::srgb(1.0, 0.0, 0.0)
+                        },
+                        custom_size: Some(Vec2::new(32.0, 32.0)),
+                        ..default()
+                    },
+                    Transform::from_xyz(server_player.pos.x, server_player.pos.y, 0.0),
+                    NetworkEntity(pid),
+                ));
+
+                if pid == session.custom_id {
+                    entity_cmds.insert(LocalPlayer);
                 }
-                GameNetworkEvent::Error { inner, .. } => {
-                    eprintln!("Client : Perte de paquets ou erreur d'exécution réseau : {:?}", inner);
-                }
-                _ => {}
-            },
-            Ok(None) => break,
-            Err(_) => break,
+            }
+        }
+
+        // Nettoyage strict des entités absentes de la zone de réplication (O(N) despawn map)
+        for (entity, _) in existing_entities.values() {
+            commands.entity(*entity).despawn();
         }
     }
 }
