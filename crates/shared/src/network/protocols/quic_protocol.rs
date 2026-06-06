@@ -207,7 +207,12 @@ impl GameSocketBackend for QuicBackend {
                                     }
                                 }
                             }
-                            BackendCommand::Shutdown => break,
+                            BackendCommand::Shutdown => {
+                                for conn in self.connections.values() {
+                                    conn.close(0u32.into(), b"Server shutting down");
+                                }
+                                break;
+                            },
                             BackendCommand::CreateStream { connection, stream, reliability } => {
                                 if reliability == GameStreamReliability::Reliable {
                                     if let Some(conn) = self.connections.get(&connection) {
@@ -229,6 +234,13 @@ impl GameSocketBackend for QuicBackend {
                                 self.unreliable_send_streams.retain(|x| x != &key);
                                 let _ = event_tx.send(GameNetworkEvent::StreamClosed(connection.into(), stream.into()));
                             },
+                            BackendCommand::Disconnect { connection } => {
+                                if let Some(conn) = self.connections.remove(&connection) {
+                                    conn.close(0u32.into(), b"Kicked by server");
+                                    self.reliable_send_streams.retain(|(uuid, _), _| uuid != &connection);
+                                    self.unreliable_send_streams.retain(|(uuid, _)| uuid != &connection);
+                                }
+                            }
                         }
                     }
                 }
@@ -271,6 +283,7 @@ impl QuicBackend {
                     data: b,
                 });
             }
+            let _ = event_tx_clone.send(GameNetworkEvent::Disconnected(uuid.into()));
         });
 
         // Stream Reader

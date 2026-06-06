@@ -1,6 +1,5 @@
 ﻿use bevy::prelude::*;
 use crate::player::Player;
-use crate::network::PlayerRegistry;
 
 pub struct DebugToolPlugin;
 
@@ -34,8 +33,8 @@ fn print_player_positions(query: Query<(Entity, &Transform), With<Player>>) {
     }
 }
 
-fn debug_print(registry: Res<PlayerRegistry>) {
-    println!("Players connected: {}", registry.players.len());
+fn debug_print(query: Query<(Entity, &Transform), With<Player>>) {
+    println!("Players connected: {}",query.iter().count());
 }
 
 fn nothing() {}

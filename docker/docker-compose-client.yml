@@ -1,0 +1,19 @@
+﻿version: '3.8'
+
+services:
+  bot_client:
+    image: my_bot_client:latest
+    build:
+      context: ..
+      dockerfile: docker/client.Dockerfile
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+
+networks:
+  default:
+    name: game-network
+    external: true

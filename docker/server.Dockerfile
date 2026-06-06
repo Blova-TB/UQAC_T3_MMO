@@ -1,45 +1,40 @@
-﻿# --- Stage 1: Builder ---
-FROM rust:latest AS builder
+﻿# --- Stage 1: Planner (Le Chef) ---
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
 
-# Dépendances système minimales
-RUN apt-get update && apt-get install -y pkg-config libudev-dev && rm -rf /var/lib/apt/lists/*
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Optimisation du cache : Manifests uniquement
-COPY Cargo.toml Cargo.lock ./
-COPY crates/shared/Cargo.toml crates/shared/
-COPY crates/server/Cargo.toml crates/server/
-COPY crates/client/Cargo.toml crates/client/
-COPY crates/orchestrator/Cargo.toml crates/orchestrator/
+# --- Stage 2: Builder (Le Cuisinier) ---
+FROM chef AS builder
+WORKDIR /app
 
-# Création de fichiers sources factices pour builder les dépendances (cache)
-RUN mkdir -p crates/shared/src crates/server/src crates/client/src crates/orchestrator/src && \
-    touch crates/shared/src/lib.rs && \
-    echo "fn main() {}" > crates/server/src/main.rs && \
-    echo "fn main() {}" > crates/client/src/main.rs && \
-    echo "fn main() {}" > crates/orchestrator/src/main.rs
+# IMPORTANT : Le serveur a besoin de ces paquets système pour compiler
+RUN apt-get update && \
+    apt-get install -y pkg-config libudev-dev && \
+    rm -rf /var/lib/apt/lists/*
 
+COPY --from=planner /app/recipe.json recipe.json
+# On ne compile QUE l'arbre de dépendances du serveur
+RUN cargo chef cook --release --recipe-path recipe.json -p server
+
+COPY . .
 RUN cargo build --release -p server
 
-# Copie du code source réel
-COPY crates ./crates
-
-# Invalidation du cache des fichiers sources et build final du binaire ciblé
-RUN touch crates/server/src/main.rs
-RUN cargo build --release -p server
-
-# --- Stage 2: Runtime ---
+# --- Stage 3: Runtime ---
 FROM debian:bookworm-slim
 WORKDIR /app
 
-# Certificats pour quinn (si communication sortante nécessaire)
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# À l'exécution, le serveur n'a besoin que des certificats de base
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# Extraction du binaire ciblé depuis le dossier target du workspace
-COPY --from=builder /app/target/release/server /app/server
+COPY --from=builder /app/target/release/server /usr/local/bin/server
 
-# Exposition du port QUIC (doit correspondre à la config game_sockets)
+# Le serveur utilise de l'UDP (souvent le cas pour les MMO / jeux temps réel)
 EXPOSE 4000/udp
 
-# Utilisation de la forme exec (tableau) pour propager correctement les signaux OS (SIGTERM)
-CMD ["./server"]
+CMD ["server"]

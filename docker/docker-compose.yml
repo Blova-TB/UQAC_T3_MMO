@@ -1,6 +1,56 @@
 ﻿version: '3.8'
 
 services:
+  dbgate:
+    image: dbgate/dbgate
+    ports:
+      - "8081:3000"
+    networks:
+      - game-network
+    environment:
+      CONNECTIONS: con1,con2
+      # Postgres (utilise les variables du .env)
+      LABEL_con1: Postgres
+      ENGINE_con1: postgres@dbgate-plugin-postgres
+      SERVER_con1: db
+      USER_con1: ${POSTGRES_USER}
+      PASSWORD_con1: ${POSTGRES_PASSWORD}
+      PORT_con1: 5432
+      DATABASE_con1: ${POSTGRES_DB}
+      # Redis
+      LABEL_con2: Redis
+      ENGINE_con2: redis@dbgate-plugin-redis
+      SERVER_con2: redis
+      PORT_con2: 6379
+
+  db:
+    build:
+      context: .
+      dockerfile: postgres.Dockerfile
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../crates/gatekeeper/migrations:/migrations:ro
+    networks:
+      - game-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server-builder:
+    build:
+      context: ..
+      dockerfile: docker/server.Dockerfile
+    image: ${SERVER_IMAGE}
+    command: ["echo", "✅ Build de l'image du serveur terminé avec succès !"]
+
   orchestrator:
     build:
       context: ..
@@ -8,19 +58,43 @@ services:
     ports:
       - "4000:4000"
     environment:
-      - REDIS_URL=redis://redis:6379/
+      - RUST_LOG=${RUST_LOG}
+      - REDIS_URL=${REDIS_URL}
+      - MIN_AVAILABLE_SERVERS=${MIN_AVAILABLE_SERVERS}
+      - SERVER_IMAGE=${SERVER_IMAGE}
+      - SERVER_MAX_PLAYERS=${SERVER_MAX_PLAYERS}
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      server-builder:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
     networks:
       - game-network
-  gateway:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ..:/app
+
+  gatekeeper:
     build:
       context: ..
-      dockerfile: docker/gateway.Dockerfile
+      dockerfile: docker/gatekeeper.Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "3000:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - RUST_LOG=${RUST_LOG}
+      - ROCKET_ADDRESS=${ROCKET_ADDRESS}
+      - ROCKET_PORT=${ROCKET_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - REDIS_URL=${REDIS_URL}
     networks:
       - game-network
+
   redis:
     image: redis:7-alpine
     ports:
@@ -28,7 +102,49 @@ services:
     networks:
       - game-network
 
+  broker:
+    container_name: broker
+    build:
+      context: ..
+      dockerfile: docker/broker.Dockerfile
+    ports:
+      - "5000:5000/udp"
+    environment:
+      - RUST_LOG=${RUST_LOG}
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - game-network
+    healthcheck:
+      test: [ "CMD-SHELL", "ss -unl | grep :5000 || exit 1" ]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
+
+  spatial-server:
+    build:
+      context: ..
+      dockerfile: docker/spatial_server.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # Utilisation de la résolution DNS interne de Docker pour cibler le conteneur orchestrator
+      - ORCHESTRATOR_ADDR=orchestrator
+      - ORCHESTRATOR_PORT=4000
+
+      - BROKER_ADDR=${BROKER_ADDR:-broker}
+      - BROKER_PORT=${BROKER_PORT:-5000}
+
+      - RUST_LOG=${RUST_LOG:-info}
+    depends_on:
+      - orchestrator
+    networks:
+      - game-network
+
 networks:
   game-network:
     driver: bridge
-  # Le server n'est pas instancié ici, l'orchestrateur le fera via l'API Docker.
+    name: game-network
+
+volumes:
+  postgres_data:
