@@ -235,7 +235,9 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     state.routing_table.unsubscribe(shard_id, client_id);
 
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
-                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), ClientLeft {
+                            client_id: CustomId::from(client_id)
+                        }.to_bytes());
                     }
                 }
 
@@ -290,6 +292,64 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     }
                 }
 
+                HandoffRequest::TAG => {
+                    let Some(pkt) = HandoffRequest::try_from_bytes(data.clone()) else { return; };
+
+                    let shard_id: u32 = pkt.shard_id.into();
+                    let entity_id: u32 = pkt.entity_id.into();
+
+                    // on abonne le game server au input et a la position du client
+                    state.routing_table.subscribe(entity_id, shard_id);
+
+                    // on forward la requete de handoff au shard concerné
+                    if let Some(conn) = state.shard_conns.get(&shard_id) {
+                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                    }
+                }
+
+                HandoffAccept::TAG  => {
+                    if let (Some(s_conn),Some(s_stream)) = (&state.spatial_server_conn, &state.spatial_server_stream) {
+                        let _ = peer.send(s_conn, s_stream, data);
+                    } else {
+                        warn!("⚠️ PositionUpdate ignoré : Spatial Server non connecté.");
+                    }
+                }
+
+                HandoffDrop::TAG => {
+                    let Some(pkt) = HandoffDrop::try_from_bytes(data.clone()) else { return; };
+
+                    let shard_id: u32 = pkt.shard_id.into();
+                    let entity_id: u32 = pkt.entity_id.into();
+
+                    // on desabonne le game server du client (position et input)
+                    state.routing_table.unsubscribe(entity_id, shard_id);
+
+                    // on forward la requete de drop au shard concerné
+                    if let Some(conn) = state.shard_conns.get(&shard_id) {
+                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                    }
+                }
+
+                HandoffComplete::TAG => {
+                    let Some(pkt) = HandoffComplete::try_from_bytes(data.clone()) else { return; };
+
+                    let new_shard_id: u32 = pkt.new_shard_id.into();
+                    let old_shard_id: u32 = pkt.old_shard_id.into();
+
+                    if let Some(conn) = state.shard_conns.get(&new_shard_id) {
+                        let take_pkt = TakeAuthority {
+                            entity_id: pkt.entity_id,
+                        }.to_bytes();
+                        let _ = peer.send(conn, state.shard_streams.get(&new_shard_id).unwrap(), take_pkt);
+                    }
+
+                    if let Some(conn) = state.shard_conns.get(&old_shard_id) {
+                        let drop_pkt = DropAuthority {
+                            entity_id: pkt.entity_id,
+                        }.to_bytes();
+                        let _ = peer.send(conn, state.shard_streams.get(&old_shard_id).unwrap(), drop_pkt);
+                    }
+                }
                 _ => warn!("Tag non reconnu : 0x{:02X}", tag),
             }
         }

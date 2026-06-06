@@ -189,13 +189,13 @@ impl QuadTree {
         (player_moved,player_loss)
     }
 
-    pub fn merge_quad_tree(&mut self, shard_id: ShardId) -> (Vec<ClientId>, AHashSet<ShardId>){
+    pub fn merge_quad_tree(&mut self, shard_id: ShardId) -> (Vec<(ClientId, ShardId)>, AHashSet<ShardId>) {
 
         let mut player_moved= (Vec::new(), AHashSet::new());
 
         self.get_all_player().into_iter().for_each(|(id, old_shard_id, pos)| {
             self.players.insert(id, pos);
-            player_moved.0.push(id);
+            player_moved.0.push((id,old_shard_id));
             player_moved.1.insert(old_shard_id);
         });
 
