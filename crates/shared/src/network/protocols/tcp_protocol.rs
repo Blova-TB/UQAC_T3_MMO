@@ -89,7 +89,8 @@ impl GameSocketBackend for TcpBackend {
                             }
                             BackendCommand::CloseStream{ connection, stream } => {
                                 let _ = event_tx.send(GameNetworkEvent::StreamClosed(connection.into(), stream.into()));
-                            }
+                            },
+                            _ => {}
                         }
                     }
                 }

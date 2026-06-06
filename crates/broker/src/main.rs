@@ -9,7 +9,7 @@ use routing::OptimizedRoutingTable;
 
 use shared::models::*;
 use shared::network::protocols::QuicBackend;
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream};
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -23,6 +23,7 @@ pub struct Claims {
 struct BrokerState {
     conn_to_client: AHashMap<GameConnection, u32>,
     client_to_conn: AHashMap<u32, GameConnection>,
+    client_streams: AHashMap<u32, GameStream>,
     routing_table: OptimizedRoutingTable,
 
     spatial_server_conn: Option<GameConnection>,
@@ -37,12 +38,70 @@ impl Default for BrokerState {
         Self {
             conn_to_client: AHashMap::new(),
             client_to_conn: AHashMap::new(),
+            client_streams: AHashMap::new(),
             routing_table: OptimizedRoutingTable::default(),
             spatial_server_conn: None,
             spatial_server_stream: None,
             shard_conns: AHashMap::new(),
             shard_streams: AHashMap::new(),
         }
+    }
+}
+
+impl BrokerState {
+    pub fn handle_disconnect(&mut self, peer: &mut GamePeer, conn: GameConnection) {
+        if let Some(client_id) = self.conn_to_client.remove(&conn) {
+
+            let packet = ClientLeft {
+                client_id: CustomId::from(client_id),
+            }.to_bytes();
+
+            if let Some(spatial_conn) = &self.spatial_server_conn {
+                if let Some(spatial_stream) = &self.spatial_server_stream {
+                    let _ = peer.send(spatial_conn, spatial_stream, packet);
+                }
+            }
+
+            let _ = self.routing_table.unsubscribe_all(client_id);
+            self.routing_table.remove_topic(client_id);
+
+            self.client_to_conn.remove(&client_id);
+            self.client_streams.remove(&client_id);
+
+            info!("👤 Client {} déconnecté. Spatial Server notifié.", client_id);
+            return;
+        }
+
+        if self.spatial_server_conn.as_ref() == Some(&conn) {
+            self.spatial_server_conn = None;
+            self.spatial_server_stream = None;
+            warn!("🗺️ Spatial Server déconnecté !");
+            return;
+        }
+
+        let disconnected_shard_id = self.shard_conns.iter()
+            .find_map(|(&id, c)| (c == &conn).then_some(id));
+
+        if let Some(shard_id) = disconnected_shard_id {
+            if let Some(orphaned_clients) = self.routing_table.remove_topic(shard_id) {
+                if !orphaned_clients.is_empty() {
+                    warn!(
+                        "⚠️ Shard {} déconnectée de force ! {} joueurs orphelins : {:?}",
+                        shard_id, orphaned_clients.len(), orphaned_clients
+                    );
+                }
+            }
+
+            self.routing_table.unsubscribe_all(shard_id);
+
+            self.shard_conns.remove(&shard_id);
+            self.shard_streams.remove(&shard_id);
+
+            info!("🧩 Shard {} déconnectée et nettoyée.", shard_id);
+            return;
+        }
+
+        warn!("❓ Déconnexion d'une entité non répertoriée dans le BrokerState.");
     }
 }
 
@@ -70,13 +129,7 @@ fn main() {
 fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: &mut GamePeer) {
     match event {
         GameNetworkEvent::Disconnected(conn) => {
-            if let Some(client_id) = state.conn_to_client.remove(&conn) {
-                state.client_to_conn.remove(&client_id);
-                state.routing_table.unsubscribe_all(client_id);
-                info!("👤 Client {} déconnecté et nettoyé.", client_id);
-            }
-            state.shard_conns.retain(|_, v| v != &conn);
-            if Some(conn) == state.spatial_server_conn { state.spatial_server_conn = None; }
+            state.handle_disconnect(peer, conn);
         }
 
         GameNetworkEvent::Message { connection, stream, data } => {
@@ -93,13 +146,15 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         let client_id = token_data.claims.custom_id;
                         state.conn_to_client.insert(connection.clone(), client_id);
                         state.client_to_conn.insert(client_id, connection);
+                        state.client_streams.insert(client_id, stream.clone());
 
                         if let (Some(s_conn), Some(s_stream)) = (&state.spatial_server_conn, &state.spatial_server_stream) {
                             let _ = peer.send(s_conn, s_stream, PlayerJoinUpdate {
                                 client_id: CustomId::from(client_id),
-                                pos: mathtools::Vec2::new(token_data.claims.pos_x, token_data.claims.pos_y),
+                                pos: Vec2::new(token_data.claims.pos_x, token_data.claims.pos_y),
                             }.to_bytes());
                         }
+                        println!("PlayerJoinUpdate send with client id {} at position : x={}, y={}", client_id, token_data.claims.pos_x, token_data.claims.pos_y);
                     }
                 }
 
@@ -108,7 +163,14 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     let id = pkt.shard_id.into();
                     state.shard_conns.insert(id, connection);
                     state.shard_streams.insert(id, stream);
-                    //TODO prévenir le spatial server
+
+                    if let (Some(s_conn),Some(s_stream)) = (&state.spatial_server_conn, &state.spatial_server_stream) {
+                        let _ = peer.send(s_conn, s_stream, ServerSpawned {
+                            shard_id: CustomId::from(id)
+                        }.to_bytes());
+                    } else {
+                        warn!("⚠️ PositionUpdate ignoré : Spatial Server non connecté.");
+                    }
                 }
 
                 BrokerHandshakeSpatial::TAG => {
@@ -128,26 +190,24 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
 
                 Publish::TAG => {
                     let Some(pkt) = Publish::try_from_bytes(data) else { return; };
-                    let broadcast = Broadcast { payload: pkt.payload };
-                    let final_msg = broadcast.to_bytes();
                     let topic_u32: u32 = pkt.topic_id.into();
-
+                    let final_msg = if let Some(&sender_client_id) = state.conn_to_client.get(&connection) {
+                        BroadcastClient {
+                            client_id: CustomId::from(sender_client_id),
+                            payload: pkt.payload,
+                        }.to_bytes()
+                    } else {
+                        Broadcast {
+                            payload: pkt.payload,
+                        }.to_bytes()
+                    };
                     if let Some(subscribers) = state.routing_table.get_subscribers(&topic_u32) {
-                        for client_id in subscribers {
-                            if let Some(client_conn) = state.client_to_conn.get(client_id) {
+                        for &sub_id in subscribers {
+                            if let Some(client_conn) = state.client_to_conn.get(&sub_id) {
                                 let _ = peer.send(client_conn, &stream, final_msg.clone());
                             }
-                        }
-                    }
-                }
-
-                ClientInput::TAG => {
-                    let Some(pkt) = ClientInput::try_from_bytes(data.clone()) else { return; };
-                    let topic_id = pkt.client_id.into();
-                    if let Some(subs) = state.routing_table.get_subscribers(&topic_id) {
-                        for &sub_id in subs {
-                            if let Some(conn) = state.shard_conns.get(&sub_id) {
-                                let _ = peer.send(conn, state.shard_streams.get(&sub_id).unwrap(), data.clone());
+                            else if let Some(shard_conn) = state.shard_conns.get(&sub_id) {
+                                let _ = peer.send(shard_conn, &stream, final_msg.clone());
                             }
                         }
                     }
@@ -155,10 +215,65 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
 
                 SpawnPlayerShard::TAG => {
                     let Some(pkt) = SpawnPlayerShard::try_from_bytes(data.clone()) else { return; };
-                    let shard_id = pkt.shard_id.into();
-                    state.routing_table.subscribe(pkt.client_id.into(), shard_id);
+                    let shard_id: u32 = pkt.shard_id.into();
+                    let client_id: u32 = pkt.client_id.into();
+
+                    state.routing_table.subscribe(client_id, shard_id);
+                    state.routing_table.subscribe(shard_id, client_id);
+
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
                         let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                    }
+                }
+
+                ServerHeartBeat::TAG => {
+                    if let Some(s_conn) = &state.spatial_server_conn {
+                        let unreliable_stream = GameStream::new(
+                            shared::constants::STREAM_PHYSICS,
+                            GameStreamReliability::Unreliable
+                        );
+                        let _ = peer.send(s_conn, &unreliable_stream, data);
+                    } else {
+                        warn!("⚠️ ServerHeartBeat ignoré : Spatial Server non connecté.");
+                    }
+                }
+
+                PositionUpdate::TAG => {
+                    if let Some(s_conn) = &state.spatial_server_conn {
+                        let unreliable_stream = GameStream::new(
+                            shared::constants::STREAM_PHYSICS,
+                            GameStreamReliability::Unreliable
+                        );
+                        let _ = peer.send(s_conn, &unreliable_stream, data);
+                    } else {
+                        warn!("⚠️ PositionUpdate ignoré : Spatial Server non connecté.");
+                    }
+                }
+
+                RefuseClient::TAG => {
+                    let Some(pkt) = RefuseClient::try_from_bytes(data.clone()) else {
+                        warn!("⚠️ Impossible de décoder le paquet RefuseClient");
+                        return;
+                    };
+
+                    let client_id: u32 = pkt.client_id.into();
+
+                    if let (Some(client_conn), Some(client_stream)) = (
+                        state.client_to_conn.get(&client_id).cloned(),
+                        state.client_streams.get(&client_id).cloned()
+                    ) {
+                        let _ = peer.send(&client_conn, &client_stream, data);
+
+                        state.client_to_conn.remove(&client_id);
+                        state.client_streams.remove(&client_id);
+                        state.conn_to_client.remove(&client_conn);
+                        state.routing_table.unsubscribe_all(client_id);
+
+                        peer.disconnect(&client_conn).expect("échec fermeture connexion client");
+
+                        info!("🚫 Client {} refusé : paquet transmis en reliable, état nettoyé.", client_id);
+                    } else {
+                        warn!("⚠️ Tentative de refus pour le client {}, mais il est introuvable.", client_id);
                     }
                 }
 

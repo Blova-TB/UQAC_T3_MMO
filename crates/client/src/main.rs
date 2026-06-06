@@ -3,15 +3,14 @@ use bevy::state::app::StatesPlugin;
 use bevy::prelude::*;
 use tokio::runtime::Runtime;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use shared::game_protocol::GameMessage;
+use bevy::math::Vec2;
 use std::time::Duration;
 use bevy::tasks::IoTaskPool;
-
+use bitcode::{Decode, Encode};
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 use shared::models::*;
-
-use rand::random;
 
 #[derive(Resource)]
 pub struct TokioRuntime(pub Runtime);
@@ -49,6 +48,19 @@ pub struct ClientState {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
 }
+
+// à déplacer ////////////
+#[derive(Encode, Decode)]
+pub struct ServerSyncMessage {
+    pub players: Vec<PlayerPositionData>,
+}
+
+#[derive(Encode, Decode)]
+pub struct PlayerPositionData {
+    pub entity_bits: u64,
+    pub position: [f32; 2],
+}
+////////////////////////
 
 #[derive(Resource)]
 pub struct LocalPlayerId(pub u32);
@@ -302,41 +314,27 @@ fn handle_ingame_network(
     loop {
         match session.peer.poll() {
             Ok(Some(event)) => match event {
-                GameNetworkEvent::Message { mut data, .. } => {
-                    if data.is_empty() { continue; }
-
-                    let tag = data.get_u8();
-
+                GameNetworkEvent::Message { connection, stream, data } => {
+                    if data.is_empty() { return; }
+                    let tag = data[0];
                     match tag {
-                        // TAG 0x04 : Broadcast venant du Broker
-                        0x04 => {
-                            if data.remaining() < 2 { continue; }
-
-                            // 1. Lire la taille du payload bitcode (en Little-Endian)
-                            let payload_len = data.get_u16_le() as usize;
-                            if data.remaining() < payload_len { continue; }
-
-                            // 2. Extraire les octets correspondants à la snapshot
-                            let inner_payload = data.copy_to_bytes(payload_len);
-
-                            // 3. Décoder la snapshot de la Shard
-                            if let Ok(sync_msg) = bitcode::decode::<ServerSyncMessage>(&inner_payload) {
-                                println!("--- State Sync Snapshot [{} Joueur(s) Visibles] ---", sync_msg.players.len());
-                                // Pour afficher les infos, tu peux dé-commenter :
-                                /*
-                                for player in sync_msg.players {
-                                    println!(
-                                        " > Entity ID: {:<10} | Position Translatée: [X: {:>6.2}, Y: {:>6.2}]",
-                                        player.entity_bits,
-                                        player.position[0],
-                                        player.position[1]
-                                    );
-                                }*/
+                        Broadcast::TAG => {
+                            let Some(pkt) = Broadcast::try_from_bytes(data) else { return; };
+                            if let Some(game_message) = GameMessage::decode(stream.stream_id, &pkt.payload) {
+                                match game_message {
+                                    GameMessage::WorldSync(sync_data) => {
+                                        for (entity_id, (pos_x, pos_y)) in sync_data.entities {
+                                            let _position = Vec2::new(pos_x, pos_y);
+                                            println!("Entity id : {} Position : {}", entity_id, _position);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            } else {
+                                eprintln!("⚠️ Impossible de décoder le payload métier sur le stream : {}", stream.stream_id);
                             }
                         }
-                        _ => {
-                            // On ignore les tags non gérés par le client pour le moment
-                        }
+                        _ => {}
                     }
                 }
                 GameNetworkEvent::Disconnected(_) => {

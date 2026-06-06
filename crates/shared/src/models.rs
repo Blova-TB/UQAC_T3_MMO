@@ -1,9 +1,8 @@
 ﻿pub use crate::custom_id::CustomId;
-pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
+pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket, PlayerData};
 use crate::{define_packet, define_packet_router};
-use mathtools::Vec2;
+pub use mathtools::Vec2;
 use serde::{Deserialize, Serialize};
-use crate::models_trait_and_macro::PlayerData;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
@@ -34,9 +33,11 @@ define_packet_router! {
         SpawnServer(SpawnServer),
         ServerSpawned(ServerSpawned),
         ShutdownServer(ShutdownServer),
-        ServerHealthCheck(ServerHealthCheck),
+        ServerHeartBeat(ServerHeartBeat),
         AssignShard(AssignShard),
         SpawnPlayerShard(SpawnPlayerShard),
+        RefuseClient(RefuseClient),
+        ClientLeft(ClientLeft),
     }
 }
 
@@ -70,19 +71,26 @@ define_packet! {
 }
 
 define_packet! {
-    BrokerHandshakeClient(0x05) {
+    BroadcastClient(0x05) {
+        client_id: CustomId,
+        payload: Vec<u8>,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeClient(0x06) {
         jwt_token: Vec<u8>,
     }
 }
 
 define_packet! {
-    BrokerHandshakeShard(0x06) {
+    BrokerHandshakeShard(0x07) {
         shard_id: CustomId,
     }
 }
 
 define_packet! {
-    BrokerHandshakeSpatial(0x07) {
+    BrokerHandshakeSpatial(0x08) {
         magic: u32,
     }
 }
@@ -175,7 +183,7 @@ define_packet! {
 
 // envoyé par le shard notamment au spatial pour la gestion du QuadTree (merge/split)
 define_packet! {
-    ServerHealthCheck(0x31) {
+    ServerHeartBeat(0x31) {
         shard_id: CustomId,
         occupancy: u8,
     }
@@ -207,6 +215,12 @@ define_packet! {
 define_packet!{
     ServerSyncMessage(0x41) {
         players: Vec<PlayerData>,
+    }
+}
+
+define_packet!{
+    RefuseClient(0x42) {
+        client_id: CustomId,
     }
 }
 
