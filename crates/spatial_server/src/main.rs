@@ -8,7 +8,7 @@ mod visualizer;
 use bytes::Bytes;
 use shared::models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 use std::time::{Duration, Instant};
-use std::{env, io};
+use std::{env, io, thread};
 use std::io::Write;
 use mathtools::Vec2;
 use quad_tree::Rect;
@@ -16,7 +16,7 @@ use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use spatial_service::SpatialService;
 use crate::shard_id::ShardId;
 use std::net::ToSocketAddrs;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, RwLock};
 
 fn main() {
     println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");
@@ -72,13 +72,21 @@ fn main() {
 
     let target_tick_duration = Duration::from_secs_f64(1.0 / 60.0);
 
-    // 2. Démarrage du Visualiseur juste avant la boucle loop !
-    let (viz_tx, viz_rx) = mpsc::channel();
-    // On écoute sur 0.0.0.0 pour que Docker laisse passer la connexion vers l'extérieur
-    visualizer::start_visualizer_server("0.0.0.0:8080", viz_rx);
+    let shared_state = Arc::new(RwLock::new(String::from("{}")));
 
-    // Limiteur d'envoi pour ne pas saturer le JSON (ex: on envoie 10 fois par seconde, pas 60)
-    let mut last_viz_update = Instant::now();
+    let viz_state = shared_state.clone();
+    thread::spawn(move || {
+        let server = tiny_http::Server::http("0.0.0.0:8080").unwrap();
+        for request in server.incoming_requests() {
+            let state = viz_state.read().unwrap();
+
+            let response = tiny_http::Response::from_string(state.clone())
+                .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+
+            let _ = request.respond(response);
+        }
+    });
 
     // 🚩 Drapeau pour s'assurer qu'on ne demande la Shard Root qu'une seule fois
     let mut root_shard_requested = false;
@@ -142,11 +150,9 @@ fn main() {
             }
         }
 
-        // 3. À LA FIN de la boucle loop (juste avant le calcul du sleep)
-        if last_viz_update.elapsed() >= Duration::from_millis(100) {
-            let json_state = visualizer::extract_viz_state(&spatial_service.quad_tree);
-            let _ = viz_tx.send(json_state); // Envoi au thread WebSocket
-            last_viz_update = Instant::now();
+        let json = visualizer::extract_viz_state(&spatial_service.quad_tree);
+        if let Ok(mut lock) = shared_state.write() {
+            *lock = json;
         }
 
         let elapsed = frame_start.elapsed();

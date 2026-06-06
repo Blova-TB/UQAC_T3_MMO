@@ -11,54 +11,64 @@
 </head>
 <body>
 <h2>🚀 Visualiseur Live - Spatial Server</h2>
-<div id="status">Déconnecté (Attente de ws://localhost:8080...)</div>
+<div id="status">
+    <span id="conn-state" style="color: #e94560;">● Déconnecté</span> |
+    <span id="player-count">0</span> joueurs |
+    <span id="shard-count">0</span> shards
+</div>
 
 <canvas id="map" width="800" height="800"></canvas>
 
 <script>
     const canvas = document.getElementById('map');
     const ctx = canvas.getContext('2d');
-    const statusEl = document.getElementById('status');
 
-    // Connecte-toi à l'adresse de ton conteneur Docker
-    const ws = new WebSocket('ws://localhost:8080');
+    async function updateMap() {
+        try {
+            const response = await fetch('http://localhost:8080');
+            const state = await response.json();
 
-    ws.onopen = () => { statusEl.style.color = '#4caf50'; statusEl.innerText = "Connecté ! En attente de données..."; };
-    ws.onclose = () => { statusEl.style.color = '#e94560'; statusEl.innerText = "Déconnecté."; };
+            document.getElementById('conn-state').innerText = "● Connecté";
+            document.getElementById('conn-state').style.color = "#4caf50";
+            document.getElementById('player-count').innerText = state.players.length;
+            document.getElementById('shard-count').innerText = state.shards.length;
 
-    ws.onmessage = (event) => {
-        const state = JSON.parse(event.data);
+            render(state);
+        } catch (e) {
+            document.getElementById('conn-state').innerText = "● Serveur injoignable";
+            document.getElementById('conn-state').style.color = "#e94560";
+        }
+    }
+    setInterval(updateMap, 100);
+
+    async function render(state) {
 
         // Effacer le dessin précédent
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Calculer l'échelle (ex: si le jeu fait 1000x1000 et le canvas 800x800, scale = 0.8)
         const gameWidth = state.bounds.max_x - state.bounds.min_x;
         const gameHeight = state.bounds.max_y - state.bounds.min_y;
         const scaleX = canvas.width / gameWidth;
         const scaleY = canvas.height / gameHeight;
 
-        // 1. Dessiner les Shards
         state.shards.forEach(shard => {
             const w = (shard.rect.max_x - shard.rect.min_x) * scaleX;
             const h = (shard.rect.max_y - shard.rect.min_y) * scaleY;
             const x = shard.rect.min_x * scaleX;
-            const y = shard.rect.min_y * scaleY;
+            const y = canvas.height - (shard.rect.max_y * scaleY);
 
             ctx.strokeStyle = '#0f3460';
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, w, h);
 
-            // Optionnel : Afficher la profondeur du QuadTree
             ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
             ctx.font = '10px Arial';
             ctx.fillText(`D:${shard.depth}`, x + 5, y + 15);
         });
 
-        // 2. Dessiner les Joueurs
         state.players.forEach(player => {
             const x = player.x * scaleX;
-            const y = player.y * scaleY;
+            const y = canvas.height - (player.y * scaleY);
 
             ctx.beginPath();
             ctx.arc(x, y, 3, 0, Math.PI * 2);

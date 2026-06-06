@@ -226,6 +226,19 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     }
                 }
 
+                DespawnPlayerShard::TAG => {
+                    let Some(pkt) = DespawnPlayerShard::try_from_bytes(data.clone()) else { return; };
+                    let shard_id: u32 = pkt.shard_id.into();
+                    let client_id: u32 = pkt.client_id.into();
+
+                    state.routing_table.unsubscribe(client_id, shard_id);
+                    state.routing_table.unsubscribe(shard_id, client_id);
+
+                    if let Some(conn) = state.shard_conns.get(&shard_id) {
+                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                    }
+                }
+
                 ServerHeartBeat::TAG => {
                     if let Some(s_conn) = &state.spatial_server_conn {
                         let unreliable_stream = GameStream::new(
