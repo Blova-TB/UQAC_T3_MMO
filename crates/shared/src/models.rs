@@ -12,6 +12,7 @@ pub enum Status {
     Online,
     Full,
     Closed,
+    Waiting,
 }
 
 // List of packets -----------------------------------------------------------
@@ -141,7 +142,20 @@ define_packet! {
 // envoyé par le spatial au shard pour dire de prendre la main sur le client concerné (ghost -> player)
 define_packet! {
     HandoffComplete(0x15) {
-        shard_id: CustomId,
+        new_shard_id: CustomId,
+        old_shard_id: CustomId,
+        entity_id: CustomId,
+    }
+}
+
+define_packet!{
+    TakeAuthority(0x16) {
+        entity_id: CustomId,
+    }
+}
+
+define_packet!{
+    DropAuthority(0x17) {
         entity_id: CustomId,
     }
 }

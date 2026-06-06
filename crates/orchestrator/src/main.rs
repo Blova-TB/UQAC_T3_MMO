@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = autoscale_timer.tick() => {
                 if let Ok(servers) = database.get_all_servers().await {
                     let available_count = servers.iter().filter(|s| {
-                        (s.status == Status::Starting || s.status == Status::Empty)
+                        (s.status == Status::Waiting || s.status == Status::Starting)
                         && s.players_online < s.max_players
                     }).count();
 
@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         println!("🚀 [Orchestrator] Requête de spawn reçue du SpatialServer pour la Shard : {}", shard_raw_id);
 
                                         if let Ok(servers) = database.get_all_servers().await {
-                                            if let Some(chosen_server) = servers.iter().find(|s| s.status == Status::Empty && s.shard_id.is_none()) {
+                                            if let Some(chosen_server) = servers.iter().find(|s| s.status == Status::Waiting && s.shard_id.is_none()) {
                                                 if let Some((&conn_uuid, _)) = active_sessions.iter().find(|(_, id)| **id == chosen_server.server_id) {
 
                                                     // 🚀 NOUVEAU : On récupère le flux fiable que le serveur a ouvert !
