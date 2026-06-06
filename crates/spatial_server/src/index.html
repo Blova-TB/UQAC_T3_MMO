@@ -1,0 +1,81 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>QuadTree Spatial Server</title>
+    <style>
+        body { background: #1a1a2e; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        canvas { background: #16213e; border: 2px solid #0f3460; box-shadow: 0 0 20px rgba(0,0,0,0.5); margin-top: 20px;}
+        #status { color: #e94560; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<h2>🚀 Visualiseur Live - Spatial Server</h2>
+<div id="status">
+    <span id="conn-state" style="color: #e94560;">● Déconnecté</span> |
+    <span id="player-count">0</span> joueurs |
+    <span id="shard-count">0</span> shards
+</div>
+
+<canvas id="map" width="800" height="800"></canvas>
+
+<script>
+    const canvas = document.getElementById('map');
+    const ctx = canvas.getContext('2d');
+
+    async function updateMap() {
+        try {
+            const response = await fetch('http://localhost:8080');
+            const state = await response.json();
+
+            document.getElementById('conn-state').innerText = "● Connecté";
+            document.getElementById('conn-state').style.color = "#4caf50";
+            document.getElementById('player-count').innerText = state.players.length;
+            document.getElementById('shard-count').innerText = state.shards.length;
+
+            render(state);
+        } catch (e) {
+            document.getElementById('conn-state').innerText = "● Serveur injoignable";
+            document.getElementById('conn-state').style.color = "#e94560";
+        }
+    }
+    setInterval(updateMap, 100);
+
+    async function render(state) {
+
+        // Effacer le dessin précédent
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const gameWidth = state.bounds.max_x - state.bounds.min_x;
+        const gameHeight = state.bounds.max_y - state.bounds.min_y;
+        const scaleX = canvas.width / gameWidth;
+        const scaleY = canvas.height / gameHeight;
+
+        state.shards.forEach(shard => {
+            const w = (shard.rect.max_x - shard.rect.min_x) * scaleX;
+            const h = (shard.rect.max_y - shard.rect.min_y) * scaleY;
+            const x = shard.rect.min_x * scaleX;
+            const y = canvas.height - (shard.rect.max_y * scaleY);
+
+            ctx.strokeStyle = '#0f3460';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, w, h);
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.font = '10px Arial';
+            ctx.fillText(`D:${shard.depth}`, x + 5, y + 15);
+        });
+
+        state.players.forEach(player => {
+            const x = player.x * scaleX;
+            const y = canvas.height - (player.y * scaleY);
+
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = '#e94560';
+            ctx.fill();
+        });
+    };
+</script>
+</body>
+</html>

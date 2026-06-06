@@ -1,37 +1,51 @@
-mod player;
-mod debug_tool;
-mod network_plugin;
-mod orchestrator_plugin;
+mod broker_plugin;
 mod config;
+mod core;
+mod events;
+mod game;
+mod orchestrator_plugin;
+mod player;
+mod states;
 
-use player::PlayerPlugin;
-use debug_tool::DebugToolPlugin;
-use network_plugin::NetworkServerPlugin;
-
-use bevy::prelude::*;
 use avian2d::prelude::*;
 use bevy::app::ScheduleRunnerPlugin;
-use std::time::Duration;
+use bevy::log::LogPlugin;
+use bevy::prelude::*;
 use bevy::scene::ScenePlugin;
-use crate::orchestrator_plugin::OrchestratorPlugin;
+use bevy::state::app::StatesPlugin;
+use std::time::Duration;
+
+use broker_plugin::BrokerPlugin;
 use config::ServerConfig;
+use core::CorePlugin;
+use game::GamePlugin;
+use orchestrator_plugin::OrchestratorPlugin;
+use player::PlayerPlugin;
+use states::ServerState;
 
 fn main() {
     App::new()
         .add_plugins((
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / 60.0))),
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+                1.0 / 60.0,
+            ))),
+            LogPlugin::default(),
+            StatesPlugin,
             AssetPlugin::default(),
             ScenePlugin,
             TransformPlugin,
             PhysicsPlugins::default(),
         ))
-        .add_plugins((
-            OrchestratorPlugin,
-            NetworkServerPlugin,
-            PlayerPlugin,
-            DebugToolPlugin,
-        ))
         .insert_resource(Gravity(Vec2::ZERO))
         .insert_resource(ServerConfig::from_env())
+        .init_state::<ServerState>()
+        // --- Nos Plugins Modulaires ---
+        .add_plugins((
+            CorePlugin,
+            OrchestratorPlugin,
+            BrokerPlugin,
+            GamePlugin,
+            PlayerPlugin,
+        ))
         .run();
 }
