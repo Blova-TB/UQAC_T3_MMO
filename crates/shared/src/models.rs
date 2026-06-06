@@ -1,5 +1,5 @@
 pub use crate::custom_id::CustomId;
-pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket, PlayerData};
+pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
 use crate::{define_packet, define_packet_router};
 pub use mathtools::Vec2;
 use serde::{Deserialize, Serialize};
@@ -204,13 +204,6 @@ define_packet! {
     ClientInput(0x41) {
         client_id: CustomId,
         input_data: [u8; 16],
-    }
-}
-
-// envoyé par le shard à tous les clients abonnés pour mettre à jour les clients
-define_packet! {
-    ServerSyncMessage(0x42) {
-        players: Vec<PlayerData>,
     }
 }
 

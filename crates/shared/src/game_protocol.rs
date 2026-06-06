@@ -1,4 +1,5 @@
-﻿use bitcode::{Encode, Decode};
+﻿pub use crate::custom_id::CustomId;
+use bitcode::{Encode, Decode};
 
 // --- Constantes d'Input (Bitmask) ---
 pub const INPUT_UP: u8     = 1 << 0; // 0000 0001 (Avancer)
@@ -42,7 +43,13 @@ impl PlayerInput {
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct WorldSyncPayload {
-    pub entities: Vec<(u32, (f32, f32))>,
+    pub entities: Vec<PlayerData>,
+}
+
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct PlayerData {
+    pub client_id: CustomId,
+    pub pos: (f32, f32),
 }
 
 macro_rules! define_game_protocol {

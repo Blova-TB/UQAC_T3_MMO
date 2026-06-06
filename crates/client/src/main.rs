@@ -1,15 +1,20 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, poll_once, IoTaskPool, Task};
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use tokio::runtime::Runtime;
+use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use shared::game_protocol::{
+    CustomId, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP, LogicalStream,
+    PlayerData, PlayerInput, PlayerInputPayload, WorldSyncPayload,
+};
+use shared::models::{BrokerHandshakeClient, Publish, ServerBinaryPacket};
+use shared::network::protocols::QuicBackend;
+use shared::network::{
+    GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability,
+};
+use shared::web_models::Claims;
 use std::collections::HashMap;
 use std::time::Duration;
-use shared::game_protocol::{LogicalStream, PlayerInput, PlayerInputPayload, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP};
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
-use shared::network::protocols::QuicBackend;
-use shared::models::{BrokerHandshakeClient, ServerSyncMessage, PlayerData, ServerBinaryPacket, Publish, CustomId};
-use shared::web_models::Claims;
+use tokio::runtime::Runtime;
 
 // --- Ressources ---
 
@@ -30,7 +35,7 @@ impl Default for TokioRuntime {
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AppState {
     #[default]
-    AuthMenu,        // Interface Egui Login/Register
+    AuthMenu, // Interface Egui Login/Register
     GatekeeperFetch, // Requête GET /server
     Connecting,      // Handshake QUIC
     InGame,          // Boucle de jeu ECS
@@ -121,36 +126,37 @@ fn main() {
         .init_resource::<PlayerInputBuffer>()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_message::<NetworkSnapshotEvent>()
-
         .add_systems(Startup, setup_core)
-
-
         // Phase 1 : Auth (UI Egui et Réseau)
         // 🚀 L'interface graphique va dans le pass spécifique d'Egui
-        .add_systems(EguiPrimaryContextPass, draw_auth_ui.run_if(in_state(AppState::AuthMenu)))
-
+        .add_systems(
+            EguiPrimaryContextPass,
+            draw_auth_ui.run_if(in_state(AppState::AuthMenu)),
+        )
         // La logique HTTP reste dans l'Update global de Bevy
         .add_systems(Update, poll_http_auth.run_if(in_state(AppState::AuthMenu)))
-
         // Phase 2 : Fetch Server
         .add_systems(OnEnter(AppState::GatekeeperFetch), spawn_gatekeeper_request)
-        .add_systems(Update, poll_gatekeeper_request.run_if(in_state(AppState::GatekeeperFetch)))
-
+        .add_systems(
+            Update,
+            poll_gatekeeper_request.run_if(in_state(AppState::GatekeeperFetch)),
+        )
         // Phase 3 : Connexion QUIC & Handshake
         .add_systems(OnEnter(AppState::Connecting), init_game_connection)
-        .add_systems(Update, handle_connection_handshake.run_if(in_state(AppState::Connecting)))
-
+        .add_systems(
+            Update,
+            handle_connection_handshake.run_if(in_state(AppState::Connecting)),
+        )
         // Phase 4 : In Game (Réseau + Synchro ECS)
-        .add_systems(Update, (handle_ingame_network, sync_players_state).run_if(in_state(AppState::InGame)))
-
+        .add_systems(
+            Update,
+            (handle_ingame_network, sync_players_state).run_if(in_state(AppState::InGame)),
+        )
         .add_systems(
             FixedUpdate,
-            (
-                gather_and_store_inputs,
-                broadcast_player_inputs
-            )
+            (gather_and_store_inputs, broadcast_player_inputs)
                 .chain()
-                .run_if(in_state(AppState::InGame))
+                .run_if(in_state(AppState::InGame)),
         )
         .run();
 }
@@ -172,7 +178,9 @@ fn draw_auth_ui(
     mut commands: Commands,
     rt: Res<TokioRuntime>,
 ) {
-    let Ok(ctx) = contexts.ctx_mut() else { return; };
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
 
     egui::Window::new("GateKeeper Authentication")
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -197,7 +205,13 @@ fn draw_auth_ui(
             ui.horizontal(|ui| {
                 if form.is_register_mode {
                     if ui.button("S'inscrire").clicked() {
-                        spawn_auth_request(&mut commands, &rt, &form.username, &form.password, true);
+                        spawn_auth_request(
+                            &mut commands,
+                            &rt,
+                            &form.username,
+                            &form.password,
+                            true,
+                        );
                     }
                     if ui.button("Aller à la connexion").clicked() {
                         form.is_register_mode = false;
@@ -205,7 +219,13 @@ fn draw_auth_ui(
                     }
                 } else {
                     if ui.button("Se connecter").clicked() {
-                        spawn_auth_request(&mut commands, &rt, &form.username, &form.password, false);
+                        spawn_auth_request(
+                            &mut commands,
+                            &rt,
+                            &form.username,
+                            &form.password,
+                            false,
+                        );
                     }
                     if ui.button("Créer un compte").clicked() {
                         form.is_register_mode = true;
@@ -227,21 +247,36 @@ fn spawn_auth_request(
     let password = pass.to_string();
 
     //todo debug
-    println!(">>> DEBUG:Lancement de la requête {} pour l'utilisateur '{}' avec le password {}", if is_register { "d'inscription" } else { "de connexion" }, username, password);
+    println!(
+        ">>> DEBUG:Lancement de la requête {} pour l'utilisateur '{}' avec le password {}",
+        if is_register {
+            "d'inscription"
+        } else {
+            "de connexion"
+        },
+        username,
+        password
+    );
 
     let join_handle = rt.0.spawn(async move {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
 
-        let res =
-            if is_register {
-                client.post("http://127.0.0.1:3000/register")
-                    .json(&serde_json::json!({ "username": username, "password": password }))
-                    .send().await
-            } else {
-                client.post("http://127.0.0.1:3000/login")
-                    .basic_auth(username, Some(password))
-                    .send().await
-            };
+        let res = if is_register {
+            client
+                .post("http://127.0.0.1:3000/register")
+                .json(&serde_json::json!({ "username": username, "password": password }))
+                .send()
+                .await
+        } else {
+            client
+                .post("http://127.0.0.1:3000/login")
+                .basic_auth(username, Some(password))
+                .send()
+                .await
+        };
 
         match res {
             Ok(response) => {
@@ -251,7 +286,7 @@ fn spawn_auth_request(
                 println!(">>> DEBUG:Réponse du serveur ({}): {}", status, text); //todo debug
                 Ok((status, text))
             }
-            Err(e) =>{
+            Err(e) => {
                 //todo debug
                 println!(">>> DEBUG:Erreur lors de la requête HTTP: {}", e); //todo debug
                 Err(e.to_string())
@@ -263,7 +298,9 @@ fn spawn_auth_request(
     println!(">>> DEBUG:result du spawn_auth_request: {:?}", join_handle);
 
     let task = IoTaskPool::get().spawn(async move {
-        join_handle.await.unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
+        join_handle
+            .await
+            .unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
     });
 
     commands.spawn(HttpAuthTask(task));
@@ -283,7 +320,8 @@ fn poll_http_auth(
                 Ok((status, body)) => {
                     if status == 200 {
                         if form.is_register_mode {
-                            form.error_message = Some("Inscription réussie. Connectez-vous.".into());
+                            form.error_message =
+                                Some("Inscription réussie. Connectez-vous.".into());
                             form.is_register_mode = false;
                         } else {
                             match extract_unverified_claims(&body) {
@@ -295,7 +333,10 @@ fn poll_http_auth(
                                     });
                                     next_state.set(AppState::GatekeeperFetch);
                                 }
-                                None => form.error_message = Some("Token JWT invalide ou corrompu".into()),
+                                None => {
+                                    form.error_message =
+                                        Some("Token JWT invalide ou corrompu".into())
+                                }
                             }
                         }
                     } else {
@@ -310,7 +351,9 @@ fn poll_http_auth(
 
 fn extract_unverified_claims(token: &str) -> Option<Claims> {
     let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 { return None; }
+    if parts.len() != 3 {
+        return None;
+    }
     let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
     serde_json::from_slice(&payload).ok()
 }
@@ -320,13 +363,21 @@ fn extract_unverified_claims(token: &str) -> Option<Claims> {
 fn spawn_gatekeeper_request(
     mut commands: Commands,
     session: Res<SessionData>,
-    rt: Res<TokioRuntime>
+    rt: Res<TokioRuntime>,
 ) {
     let jwt_token = session.gatekeeper_token.clone();
 
     let join_handle = rt.0.spawn(async move {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
-        match client.get("http://127.0.0.1:3000/server").bearer_auth(jwt_token).send().await {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        match client
+            .get("http://127.0.0.1:3000/server")
+            .bearer_auth(jwt_token)
+            .send()
+            .await
+        {
             Ok(res) => {
                 let status = res.status().as_u16();
                 let text = res.text().await.unwrap_or_default();
@@ -337,7 +388,9 @@ fn spawn_gatekeeper_request(
     });
 
     let task = IoTaskPool::get().spawn(async move {
-        join_handle.await.unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
+        join_handle
+            .await
+            .unwrap_or_else(|e| Err(format!("Thread panic: {}", e)))
     });
     commands.spawn(FetchServerTask(task));
 }
@@ -357,22 +410,28 @@ fn poll_gatekeeper_request(
                     match serde_json::from_str::<serde_json::Value>(&response_text) {
                         Ok(json) => {
                             let broker_addr = json["broker_addr"].as_str().unwrap_or("");
-                            session.session_token = json["session_token"].as_str().unwrap_or("").to_string();
+                            session.session_token =
+                                json["session_token"].as_str().unwrap_or("").to_string();
 
                             let parts: Vec<&str> = broker_addr.split(':').collect();
                             if parts.len() == 2 && session.session_token.len() > 0 {
-
                                 let mut target_ip = parts[0].to_string();
 
                                 //todo debug
                                 if target_ip.starts_with("172.") || target_ip.starts_with("10.") {
-                                    println!(">>> DEBUG: IP interne Docker détectée ({}), forçage vers 127.0.0.1", target_ip);
+                                    println!(
+                                        ">>> DEBUG: IP interne Docker détectée ({}), forçage vers 127.0.0.1",
+                                        target_ip
+                                    );
                                     target_ip = "127.0.0.1".to_string();
                                 }
 
                                 if let Ok(port) = parts[1].parse::<u16>() {
                                     //todo debug
-                                    println!(">>> DEBUG: Cible finale du Client -> {}:{}", target_ip, port);
+                                    println!(
+                                        ">>> DEBUG: Cible finale du Client -> {}:{}",
+                                        target_ip, port
+                                    );
                                     commands.insert_resource(TargetServer {
                                         ip: target_ip,
                                         port,
@@ -381,8 +440,6 @@ fn poll_gatekeeper_request(
                                     //todo debug
                                     println!(">>> DEBUG: Connecting ...");
                                 }
-
-
                             }
                         }
                         Err(_) => eprintln!("Erreur lors de la lecture du JSON du Gatekeeper."),
@@ -401,11 +458,17 @@ fn init_game_connection(mut commands: Commands, target: Res<TargetServer>) {
     let backend = QuicBackend::new();
     let peer = GamePeer::new(backend);
 
-    println!(">>> DEBUG: Tentative de connexion QUIC (UDP) vers {}:{}", target.ip, target.port);
+    println!(
+        ">>> DEBUG: Tentative de connexion QUIC (UDP) vers {}:{}",
+        target.ip, target.port
+    );
 
     match peer.connect(&target.ip, target.port) {
         Ok(_) => println!(">>> DEBUG: socket QUIC ouvert. En attente du Handshake"),
-        Err(e) => eprintln!(">>> ERREUR: Échec immédiat de la création du socket QUIC: {:?}", e),
+        Err(e) => eprintln!(
+            ">>> ERREUR: Échec immédiat de la création du socket QUIC: {:?}",
+            e
+        ),
     }
 
     commands.insert_resource(ClientState {
@@ -424,7 +487,9 @@ fn handle_connection_handshake(
         match event {
             GameNetworkEvent::Connected(conn) => {
                 state.connection = Some(conn.clone());
-                let _ = state.peer.create_stream(conn, GameStreamReliability::Reliable);
+                let _ = state
+                    .peer
+                    .create_stream(conn, GameStreamReliability::Reliable);
             }
             GameNetworkEvent::StreamCreated(conn, stream) => {
                 if stream.is_reliable() {
@@ -432,7 +497,11 @@ fn handle_connection_handshake(
                         jwt_token: session.session_token.as_bytes().to_vec(),
                     };
 
-                    if state.peer.send(&conn, &stream, handshake.to_bytes()).is_ok() {
+                    if state
+                        .peer
+                        .send(&conn, &stream, handshake.to_bytes())
+                        .is_ok()
+                    {
                         next_state.set(AppState::InGame);
                         //todo debug
                         println!(">>> DEBUG: Handshake envoyé avec succès, passage en InGame");
@@ -459,8 +528,11 @@ fn handle_ingame_network(
     while let Ok(Some(event)) = state.peer.poll() {
         match event {
             GameNetworkEvent::Message { data, .. } => {
-                if let Some(msg) = ServerSyncMessage::try_from_bytes(data) {
-                    ev_snapshot.write(NetworkSnapshotEvent { players: msg.players });
+                // on utilise bitcode pour décoder les messages binaires du serveur
+                if let Some(msg) = bitcode::decode::<WorldSyncPayload>(&data).ok() {
+                    ev_snapshot.write(NetworkSnapshotEvent {
+                        players: msg.entities,
+                    });
                 }
             }
             GameNetworkEvent::Disconnected(_) => {
@@ -489,8 +561,8 @@ fn sync_players_state(
 
             if let Some((_, transform)) = existing_entities.get_mut(&pid) {
                 // Interpolation recommandée pour le futur. Set direct pour l'instant.
-                transform.translation.x = server_player.pos.x;
-                transform.translation.y = server_player.pos.y;
+                transform.translation.x = server_player.pos.0;
+                transform.translation.y = server_player.pos.1;
 
                 existing_entities.remove(&pid);
             } else {
@@ -505,7 +577,7 @@ fn sync_players_state(
                         custom_size: Some(Vec2::new(32.0, 32.0)),
                         ..default()
                     },
-                    Transform::from_xyz(server_player.pos.x, server_player.pos.y, 0.0),
+                    Transform::from_xyz(server_player.pos.0, server_player.pos.1, 0.0),
                     NetworkEntity(pid),
                 ));
 
@@ -528,11 +600,21 @@ fn gather_and_store_inputs(
 ) {
     let mut current_frame_input = 0u8;
 
-    if keyboard.pressed(KeyCode::KeyW)||keyboard.pressed(KeyCode::KeyZ) { current_frame_input |= INPUT_UP; }
-    if keyboard.pressed(KeyCode::KeyS) { current_frame_input |= INPUT_DOWN; }
-    if keyboard.pressed(KeyCode::KeyA) { current_frame_input |= INPUT_LEFT; }
-    if keyboard.pressed(KeyCode::KeyD) { current_frame_input |= INPUT_RIGHT; }
-    if keyboard.pressed(KeyCode::KeyE) { current_frame_input |= INPUT_ACTION; }
+    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::KeyZ) {
+        current_frame_input |= INPUT_UP;
+    }
+    if keyboard.pressed(KeyCode::KeyS) {
+        current_frame_input |= INPUT_DOWN;
+    }
+    if keyboard.pressed(KeyCode::KeyA) {
+        current_frame_input |= INPUT_LEFT;
+    }
+    if keyboard.pressed(KeyCode::KeyD) {
+        current_frame_input |= INPUT_RIGHT;
+    }
+    if keyboard.pressed(KeyCode::KeyE) {
+        current_frame_input |= INPUT_ACTION;
+    }
 
     // pas opti mais tant pis
     input_buffer.history.copy_within(0..15, 1);
@@ -545,7 +627,9 @@ fn broadcast_player_inputs(
     state: Res<ClientState>,
     session: Res<SessionData>,
 ) {
-    let Some(conn) = &state.connection else { return };
+    let Some(conn) = &state.connection else {
+        return;
+    };
 
     let sync_payload = PlayerInputPayload {
         inputs: input_buffer.history.map(|input| PlayerInput { input }),
@@ -558,7 +642,7 @@ fn broadcast_player_inputs(
 
     let stream = GameStream::new(
         LogicalStream::Input as u16,
-        GameStreamReliability::Unreliable
+        GameStreamReliability::Unreliable,
     );
 
     let _ = state.peer.send(conn, &stream, publish_packet.to_bytes());
