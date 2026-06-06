@@ -146,16 +146,22 @@ impl SpatialService {
             return None;
         };
 
+        let despawn_pkt = DespawnPlayerShard {
+            shard_id: shard_id.into(),
+            client_id: client_id.into(),
+        };
+        outgoing_packets.push((PeerType::Broker, despawn_pkt.to_bytes()));
+
         // on prend tous les shards dans la marge du player (un peu plus) pour les prévenir de son départ
         let shard_id_concerned = self.quad_tree.shards_near(pos, self.margin * 2f32);
 
-        for shard_id in shard_id_concerned {
-            if self.ghost_client.get(&shard_id).map_or(false, |ghosts| ghosts.contains(&client_id)) {
+        for temp_shard_id in shard_id_concerned {
+            if self.ghost_client.get(&temp_shard_id).map_or(false, |ghosts| ghosts.contains(&client_id)) {
 
-                self.ghost_client.get_mut(&shard_id)?.retain(|&s| s != client_id);
+                self.ghost_client.get_mut(&temp_shard_id)?.retain(|&s| s != client_id);
 
                 let despawn_pkt = DespawnPlayerShard {
-                    shard_id: shard_id.into(),
+                    shard_id: temp_shard_id.into(),
                     client_id: client_id.into(),
                 };
                 outgoing_packets.push((PeerType::Broker, despawn_pkt.to_bytes()));
