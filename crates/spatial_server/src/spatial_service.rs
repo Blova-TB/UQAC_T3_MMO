@@ -6,7 +6,7 @@ use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer, RefuseClient, ClientLeft};
+use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer, RefuseClient, ClientLeft, DespawnPlayerShard};
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
@@ -113,7 +113,47 @@ impl SpatialService {
         &mut self,
         update_data: ClientLeft,
     ) -> Option<Vec<(PeerType, Bytes)>> {
-        todo!()
+        let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
+
+        let client_id = ClientId::try_from(update_data.client_id).ok()?;
+
+        let Some((shard_id, _)) = self.client_to_shards.remove(&client_id) else {
+            println!(
+                "error : client_id {:?} not found in client_to_shards (process_player_left)",
+                client_id
+            );
+            // normalement impossible
+            return None;
+        };
+
+        let Some(pos) = self.quad_tree.remove_player(client_id, shard_id) else {
+            println!(
+                "error : player position not found in quad_tree for client_id {:?} and shard_id {:?} (process_player_left)",
+                client_id, shard_id
+            );
+            // normalement impossible
+            return None;
+        };
+
+        // on prend tous les shards dans la marge du player (un peu plus) pour les prévenir de son départ
+        let shard_id_concerned = self.quad_tree.shards_near(pos, self.margin * 2f32);
+
+        for shard_id in shard_id_concerned {
+            if self.ghost_client.get(&shard_id).map_or(false, |ghosts| ghosts.contains(&client_id)) {
+
+                self.ghost_client.get_mut(&shard_id)?.retain(|&s| s != client_id);
+
+                let handoff_drop = DespawnPlayerShard {
+                    shard_id: shard_id.into(),
+                    client_id: client_id.into(),
+                };
+                outgoing_packets.push((PeerType::Broker, handoff_drop.to_bytes()));
+            }
+        }
+
+        self.client_waiting_for_crossing.remove(&client_id);
+
+        Some(outgoing_packets)
     }
 
     pub fn process_position_update(
@@ -125,6 +165,7 @@ impl SpatialService {
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
 
         let new_pos = update_data.pos;
+        println!("client_id: {:?} position : {:?} timestamp : {:?}", client_id, new_pos, Instant::now());
 
         let new_shard_id = self.quad_tree.shard_id_for(new_pos)?;
 
@@ -195,6 +236,16 @@ impl SpatialService {
     ) -> Option<Vec<(PeerType, Bytes)>> {
         let client_id = ClientId::try_from(update_data.entity_id).ok()?;
         let shard_id = ShardId::try_from(update_data.shard_id).ok()?;
+
+        let Some(_) = self.client_to_shards.get(&client_id) else {
+            println!(
+                "error : client_id {:?} not found in client_to_shards (process_handoff_accept)",
+                client_id
+            );
+            // vraiment improbable comme situation :
+            // probablement un client qui s'est déconnecté pendant le handoff.
+            return None;
+        };
 
         if let Some(&waiting_shard) = self.client_waiting_for_crossing.get(&client_id) {
             if waiting_shard == shard_id {
