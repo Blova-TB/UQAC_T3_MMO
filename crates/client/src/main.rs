@@ -2,7 +2,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bevy::prelude::*;
 use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use shared::game_protocol::{CustomId, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP, LogicalStream, PlayerData, PlayerInput, PlayerInputPayload, GameMessage};
+use shared::game_protocol::{
+    CustomId, GameMessage, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP,
+    LogicalStream, PlayerData, PlayerInput, PlayerInputPayload,
+};
 use shared::models::{Broadcast, BrokerHandshakeClient, Publish, RefuseClient, ServerBinaryPacket};
 use shared::network::protocols::QuicBackend;
 use shared::network::{
@@ -98,6 +101,8 @@ struct HttpAuthTask(Task<Result<(u16, String), String>>);
 #[derive(Component)]
 struct FetchServerTask(Task<Result<(u16, String), String>>);
 
+#[derive(Component)]
+pub struct TargetPosition(pub Vec2);
 // --- Events ---
 
 #[derive(Message)]
@@ -149,7 +154,14 @@ fn main() {
         // Phase 4 : In Game (Réseau + Synchro ECS)
         .add_systems(
             Update,
-            (handle_ingame_network, sync_players_state, camera_follow_local_player.after(sync_players_state)).run_if(in_state(AppState::InGame)),
+            (
+                handle_ingame_network,
+                sync_players_state,
+                interpolate_transforms,
+                camera_follow_local_player
+            )
+                .chain()
+                .run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             FixedUpdate,
@@ -540,14 +552,20 @@ fn handle_ingame_network(
 ) {
     while let Ok(Some(event)) = state.peer.poll() {
         match event {
-            GameNetworkEvent::Message {stream, data, .. } => {
-                if data.is_empty() { return; }
+            GameNetworkEvent::Message { stream, data, .. } => {
+                if data.is_empty() {
+                    return;
+                }
                 let tag = data[0];
 
                 match tag {
                     Broadcast::TAG => {
-                        let Some(pkt) = Broadcast::try_from_bytes(data) else { return; };
-                        if let Some(game_message) = GameMessage::decode(stream.stream_id, &pkt.payload) {
+                        let Some(pkt) = Broadcast::try_from_bytes(data) else {
+                            return;
+                        };
+                        if let Some(game_message) =
+                            GameMessage::decode(stream.stream_id, &pkt.payload)
+                        {
                             match game_message {
                                 GameMessage::WorldSync(sync_data) => {
                                     ev_snapshot.write(NetworkSnapshotEvent {
@@ -557,7 +575,10 @@ fn handle_ingame_network(
                                 _ => {}
                             }
                         } else {
-                            eprintln!("⚠️ Impossible de décoder le payload métier sur le stream : {}", stream.stream_id);
+                            eprintln!(
+                                "⚠️ Impossible de décoder le payload métier sur le stream : {}",
+                                stream.stream_id
+                            );
                         }
                     }
                     RefuseClient::TAG => {
@@ -574,7 +595,10 @@ fn handle_ingame_network(
                 next_state.set(AppState::AuthMenu);
             }
             GameNetworkEvent::Error { inner, .. } => {
-                eprintln!("Client : Perte de paquets ou erreur d'exécution réseau : {:?}", inner);
+                eprintln!(
+                    "Client : Perte de paquets ou erreur d'exécution réseau : {:?}",
+                    inner
+                );
             }
             _ => {}
         }
@@ -584,26 +608,25 @@ fn handle_ingame_network(
 fn sync_players_state(
     mut commands: Commands,
     mut events: MessageReader<NetworkSnapshotEvent>,
-    mut q_players: Query<(Entity, &NetworkEntity, &mut Transform)>,
+    mut q_players: Query<(Entity, &NetworkEntity, &mut TargetPosition)>,
     assets: Res<GameAssets>,
     session: Res<SessionData>,
 ) {
     for event in events.read() {
-        let mut existing_entities: HashMap<u32, (Entity, Mut<Transform>)> = q_players
+        let mut existing_entities: HashMap<u32, (Entity, Mut<TargetPosition>)> = q_players
             .iter_mut()
-            .map(|(e, net_id, transform)| (net_id.0, (e, transform)))
+            .map(|(e, net_id, target)| (net_id.0, (e, target)))
             .collect();
 
         for server_player in &event.players {
             let pid = server_player.client_id.as_u32();
 
-            if let Some((_, transform)) = existing_entities.get_mut(&pid) {
-                // Interpolation recommandée pour le futur. Set direct pour l'instant.
-                transform.translation.x = server_player.pos.0;
-                transform.translation.y = server_player.pos.1;
-
+            if let Some((_, target_pos)) = existing_entities.get_mut(&pid) {
+                // Mise à jour de la cible logique uniquement
+                target_pos.0 = Vec2::from(server_player.pos);
                 existing_entities.remove(&pid);
             } else {
+                // Instanciation initiale : on set le Transform ET le TargetPosition à la même valeur
                 let mut entity_cmds = commands.spawn((
                     Sprite {
                         image: assets.player_sprite.clone(),
@@ -617,6 +640,7 @@ fn sync_players_state(
                     },
                     Transform::from_xyz(server_player.pos.0, server_player.pos.1, 0.0),
                     NetworkEntity(pid),
+                    TargetPosition(Vec2::from(server_player.pos)),
                 ));
 
                 if pid == session.custom_id {
@@ -625,9 +649,28 @@ fn sync_players_state(
             }
         }
 
-        // Nettoyage strict des entités absentes de la zone de réplication (O(N) despawn map)
         for (entity, _) in existing_entities.values() {
             commands.entity(*entity).despawn();
+        }
+    }
+}
+
+fn interpolate_transforms(time: Res<Time>, mut query: Query<(&mut Transform, &TargetPosition)>) {
+    let dt = time.delta_secs();
+
+    // Constante de convergence (ajustez entre 10.0 et 20.0 selon la réactivité voulue).
+    // Plus la valeur est haute, plus le rattrapage de la cible est rapide (mais moins lissé).
+    let convergence_speed = 15.0;
+    let lerp_factor = 1.0 - (-convergence_speed * dt).exp();
+
+    for (mut transform, target) in &mut query {
+        let target_vec3 = Vec3::new(target.0.x, target.0.y, transform.translation.z);
+
+        // Si la distance est infime, on snap pour éviter les calculs de micro-tremblements (jitter)
+        if transform.translation.distance_squared(target_vec3) < 0.001 {
+            transform.translation = target_vec3;
+        } else {
+            transform.translation = transform.translation.lerp(target_vec3, lerp_factor);
         }
     }
 }
@@ -644,7 +687,7 @@ fn gather_and_store_inputs(
     if keyboard.pressed(KeyCode::KeyS) {
         current_frame_input |= INPUT_DOWN;
     }
-    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::KeyQ){
+    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::KeyQ) {
         current_frame_input |= INPUT_LEFT;
     }
     if keyboard.pressed(KeyCode::KeyD) {
