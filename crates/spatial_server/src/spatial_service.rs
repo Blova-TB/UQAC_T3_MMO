@@ -10,11 +10,22 @@ use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
-    pub client_to_shards: AHashMap<ClientId, (ShardId, std::time::Instant)>, // client_id → (shard_id, last_shard_change_time) (temps pour l'Hystérésis)
-    pub ghost_client: AHashMap<ShardId, Vec<ClientId>>, // shard_id → client_id: is replicate in ghost on this serv ? (if exist alors le shard est pret à recevoir l'autorité)
-    pub client_waiting_for_crossing: AHashMap<ClientId, ShardId>, // client_id → (shard_id) : client pas encore repliqué en ghost mais qui a deja cross.
-    pub shard_waiting_for_subdivide: AHashMap<ShardId, Vec<(ShardId, bool)>>, // shard_id : shard qui a demandé une subdivision et qui attend que tous les clients soient en ghost pour subdiviser
+
+    /// client_id → (shard_id, last_shard_change_time) (temps pour l'Hystérésis)
+    pub client_to_shards: AHashMap<ClientId, (ShardId, std::time::Instant)>,
+
+    /// shard_id → client_id: is replicate in ghost on this serv ? (if exist alors le shard est pret à recevoir l'autorité)
+    pub ghost_client: AHashMap<ShardId, Vec<ClientId>>,
+
+    /// client_id → (old_shard_id, new_shard_id) : client pas encore repliqué en ghost mais qui a deja cross.
+    pub client_waiting_for_crossing: AHashMap<ClientId, (ShardId,ShardId)>,
+
+    /// shard_id : shard qui a demandé une subdivision et qui attend que tous ses enfants soient spawné pour faire le subdivideNode
+    pub shard_waiting_for_subdivide: AHashMap<ShardId, Vec<(ShardId, bool)>>,
+
+    /// shard_id : shard qui a demandé une fusion et qui attend que le shard parent soit spawné pour faire le mergeNode
     pub shard_waiting_for_merge: AHashSet<ShardId>,
+
     pub margin: f32,
     pub occupation_to_subdivide: u8,
     pub occupation_to_merge: u8,
@@ -143,11 +154,11 @@ impl SpatialService {
 
                 self.ghost_client.get_mut(&shard_id)?.retain(|&s| s != client_id);
 
-                let handoff_drop = DespawnPlayerShard {
+                let despawn_pkt = DespawnPlayerShard {
                     shard_id: shard_id.into(),
                     client_id: client_id.into(),
                 };
-                outgoing_packets.push((PeerType::Broker, handoff_drop.to_bytes()));
+                outgoing_packets.push((PeerType::Broker, despawn_pkt.to_bytes()));
             }
         }
 
@@ -246,14 +257,15 @@ impl SpatialService {
             return None;
         };
 
-        if let Some(&waiting_shard) = self.client_waiting_for_crossing.get(&client_id) {
+        if let Some(&(old_shard_id, waiting_shard)) = self.client_waiting_for_crossing.get(&client_id) {
             if waiting_shard == shard_id {
                 // si le client attendait pour cross dans cette shard
                 self.client_waiting_for_crossing.remove(&client_id);
 
                 let handoff_complete = HandoffComplete {
-                    shard_id: shard_id.into(),
+                    new_shard_id: shard_id.into(),
                     entity_id: client_id.into(),
+                    old_shard_id: old_shard_id.into(),
                 };
 
                 return Some(vec![(PeerType::Broker, handoff_complete.to_bytes())]);
@@ -479,7 +491,7 @@ impl SpatialService {
 
         for (player_id, player_new_shard_id, player_pos) in players {
             self.client_waiting_for_crossing
-                .insert(player_id, player_new_shard_id);
+                .insert(player_id, (shard_id,player_new_shard_id));
 
             self.client_to_shards
                 .insert(player_id, (player_new_shard_id, std::time::Instant::now()));
@@ -563,8 +575,8 @@ impl SpatialService {
 
         let players = current_node.merge_quad_tree(shard_id);
 
-        for player_id in players.0 {
-            self.client_waiting_for_crossing.insert(player_id, shard_id);
+        for (player_id,old_shard_id) in players.0 {
+            self.client_waiting_for_crossing.insert(player_id, (old_shard_id,shard_id));
             self.client_to_shards
                 .insert(player_id, (shard_id, std::time::Instant::now()));
             outgoing_packets.push(fast_handoff_req(player_id, shard_id));
@@ -614,7 +626,8 @@ impl SpatialService {
                 .push(client_id);
 
             let handoff_complete = HandoffComplete {
-                shard_id: new_shard_id.into(),
+                new_shard_id: new_shard_id.into(),
+                old_shard_id: old_shard_id.into(),
                 entity_id: client_id.into(),
             };
 
@@ -625,7 +638,7 @@ impl SpatialService {
             // normalement, il a deja été ping par un handoffRequest quand player est entré dans margin
 
             self.client_waiting_for_crossing
-                .insert(client_id, new_shard_id);
+                .insert(client_id, (old_shard_id, new_shard_id));
         }
 
         if self.quad_tree.insert_player(client_id, new_pos).is_none() {
