@@ -1,13 +1,15 @@
-﻿use bevy::prelude::*;
-use avian2d::prelude::*;
+﻿use avian2d::prelude::*;
+use bevy::prelude::*;
+use shared::game_protocol::{INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP};
 
-// --- Plugin ---
+// ✨ L'importation vitale qui manquait pour résoudre l'erreur E0412
+use crate::game::PlayerInputState;
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        //app.add_systems(Startup, (spawn_initial_player,apply_forces).chain());
+        app.add_systems(FixedUpdate, apply_player_inputs);
     }
 }
 
@@ -34,6 +36,7 @@ pub struct PlayerBundle {
     collider: Collider,
     linear_damping: LinearDamping,
     locked_axes: LockedAxes,
+    velocity: LinearVelocity,
 
     transform: Transform,
     global_transform: GlobalTransform,
@@ -50,6 +53,7 @@ impl PlayerBundle {
             collider: Collider::circle(radius),
             linear_damping: LinearDamping(5.0),
             locked_axes: LockedAxes::ROTATION_LOCKED,
+            velocity: LinearVelocity::ZERO,
 
             transform: Transform::from_translation(position.extend(0.0)),
             global_transform: GlobalTransform::default(),
@@ -59,21 +63,22 @@ impl PlayerBundle {
 
 // --- Systèmes ---
 
-pub fn spawn_initial_player(mut commands: Commands) {
-    let start_position = Vec2::ZERO;
+pub fn apply_player_inputs(
+    mut query: Query<(&PlayerInputState, &MovementSpeed, &mut LinearVelocity)>,
+) {
+    for (input_state, speed, mut velocity) in query.iter_mut() {
+        let mut dir = Vec2::ZERO;
+        let inp = input_state.latest_input;
 
-    commands.spawn(PlayerBundle::new(
-        start_position,
-        100,    // health
-        300.0,  // speed
-        15.0,   // radius
-    ));
+        if inp & INPUT_UP != 0 { dir.y += 1.0; }
+        if inp & INPUT_DOWN != 0 { dir.y -= 1.0; }
+        if inp & INPUT_LEFT != 0 { dir.x -= 1.0; }
+        if inp & INPUT_RIGHT != 0 { dir.x += 1.0; }
 
-    println!("Player spawned at {:?}", start_position);
-}
-
-fn apply_forces(mut query: Query<Forces>) {
-    for mut forces in &mut query {
-        forces.apply_linear_impulse(Vec2::new(0.0, 1000.0));
+        if dir != Vec2::ZERO {
+            let normalized_dir = dir.normalize();
+            velocity.x = normalized_dir.x * speed.0;
+            velocity.y = normalized_dir.y * speed.0;
+        }
     }
 }
