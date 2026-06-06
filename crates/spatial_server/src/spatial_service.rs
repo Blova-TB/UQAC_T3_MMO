@@ -311,6 +311,7 @@ impl SpatialService {
         };
 
         current_node.server_occupation = Option::from(update_data.occupancy);
+        println!("Server occupation : {:?}", current_node.server_occupation);
 
         if update_data.occupancy > self.occupation_to_subdivide {
             if current_node.depth >= current_node.max_depth {
@@ -402,6 +403,7 @@ impl SpatialService {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
+        println!("Shard id: {:?} spawned", shard_id);
 
         if shard_id == ShardId::ROOT && !self.is_root_initialized {
             self.is_root_initialized = true;
@@ -486,6 +488,7 @@ impl SpatialService {
                              near_shards: Vec<ShardId>,
                              packets: &mut Vec<(PeerType, Bytes)>| {
             for near_shard_id in near_shards {
+                println!("Fast Handoff entity:{:?} shard_id:{:?}", entity_id, near_shard_id);
                 packets.push(fast_handoff_req(entity_id, near_shard_id));
             }
         };

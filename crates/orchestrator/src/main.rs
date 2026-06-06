@@ -231,6 +231,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         println!("⚠️ [Orchestrator] Le serveur {} n'a pas encore de flux fiable ouvert.", chosen_server.server_id);
                                                     }
                                                 }
+                                            } else {
+                                                todo!("Gérer pas assez de servers dans le pool")
                                             }
                                         }
                                     }

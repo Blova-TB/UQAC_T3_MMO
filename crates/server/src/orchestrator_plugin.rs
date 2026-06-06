@@ -1,6 +1,6 @@
 ﻿use crate::config::ServerConfig;
 use crate::core::AssignedShard;
-use crate::player::Player;
+use crate::player::{Ghost, Player};
 use crate::states::ServerState;
 use bevy::prelude::*;
 use bytes::Bytes;
@@ -56,7 +56,7 @@ fn connect_to_orchestrator(mut commands: Commands, config: Res<ServerConfig>) {
 
 fn poll_orchestrator(
     mut commands: Commands,
-    mut orch_client_opt: Option<ResMut<OrchestratorClient>>,
+    orch_client_opt: Option<ResMut<OrchestratorClient>>,
     mut next_state: ResMut<NextState<ServerState>>,
 ) {
     let Some(mut orch_client) = orch_client_opt else { return };
@@ -102,7 +102,7 @@ fn send_heartbeat(
     state: Res<State<ServerState>>,
     mut timer: ResMut<HeartbeatTimer>,
     config: Res<ServerConfig>,
-    player_query: Query<(), With<Player>>,
+    player_query: Query<(), (With<Player>, Without<Ghost>)>,
     orch_client_opt: Option<ResMut<OrchestratorClient>>,
 ) {
     let Some(orch_client) = orch_client_opt else { return };

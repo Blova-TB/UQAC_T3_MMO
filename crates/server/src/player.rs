@@ -2,7 +2,6 @@
 use bevy::prelude::*;
 use shared::game_protocol::{INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP};
 
-// ✨ L'importation vitale qui manquait pour résoudre l'erreur E0412
 use crate::game::PlayerInputState;
 
 pub struct PlayerPlugin;
@@ -18,11 +17,15 @@ impl Plugin for PlayerPlugin {
 #[derive(Component)]
 pub struct Player;
 
+#[allow(dead_code)]
 #[derive(Component)]
 pub struct Health(pub u32);
 
 #[derive(Component)]
 pub struct MovementSpeed(pub f32);
+
+#[derive(Component)]
+pub struct Ghost;
 
 // --- Bundle ---
 
@@ -64,7 +67,7 @@ impl PlayerBundle {
 // --- Systèmes ---
 
 pub fn apply_player_inputs(
-    mut query: Query<(&PlayerInputState, &MovementSpeed, &mut LinearVelocity)>,
+    mut query: Query<(&PlayerInputState, &MovementSpeed, &mut LinearVelocity), (With<Player>, Without<Ghost>)>,
 ) {
     for (input_state, speed, mut velocity) in query.iter_mut() {
         let mut dir = Vec2::ZERO;

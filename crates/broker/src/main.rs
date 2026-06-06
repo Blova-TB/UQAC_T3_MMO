@@ -293,10 +293,12 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 HandoffRequest::TAG => {
+                    println!("FastHandOff received");
                     let Some(pkt) = HandoffRequest::try_from_bytes(data.clone()) else { return; };
 
                     let shard_id: u32 = pkt.shard_id.into();
                     let entity_id: u32 = pkt.entity_id.into();
+                    println!("shard_id : {:?}, entity_id : {:?}", shard_id, entity_id);
 
                     // on abonne le game server au input et a la position du client
                     state.routing_table.subscribe(entity_id, shard_id);
@@ -348,6 +350,14 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                             entity_id: pkt.entity_id,
                         }.to_bytes();
                         let _ = peer.send(conn, state.shard_streams.get(&old_shard_id).unwrap(), drop_pkt);
+                    }
+                }
+
+                ShutdownServerOnEmpty::TAG => {
+                    let Some(pkt) = ShutdownServerOnEmpty::try_from_bytes(data.clone()) else { return; };
+                    let shard_id: u32 = pkt.shard_id.into();
+                    if let (Some(s_conn), Some(s_stream)) = (state.shard_conns.get(&shard_id), state.shard_streams.get(&shard_id)) {
+                        let _ = peer.send(s_conn, s_stream, data);
                     }
                 }
                 _ => warn!("Tag non reconnu : 0x{:02X}", tag),

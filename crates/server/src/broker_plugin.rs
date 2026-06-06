@@ -1,12 +1,12 @@
 ﻿use crate::config::ServerConfig;
 use crate::core::AssignedShard;
-use crate::events::{BrokerEvent};
-use crate::player::Player;
+use crate::events::{BrokerCommand, BrokerEvent};
+use crate::player::{Ghost, Player};
 use crate::states::ServerState;
 use bevy::prelude::*;
 use shared::custom_id::CustomId;
-use shared::game_protocol::GameMessage;
-use shared::models::{BrokerHandshakeShard, ClientLeft, SpawnPlayerShard, ServerHeartBeat, BroadcastClient};
+use shared::game_protocol::{GameMessage, LogicalStream};
+use shared::models::{BroadcastClient, BrokerHandshakeShard, ClientLeft, DropAuthority, HandoffAccept, HandoffRequest, PositionUpdate, Publish, ServerHeartBeat, ShutdownServerOnEmpty, SpawnPlayerShard, TakeAuthority, Vec2 as MathVec2};
 use shared::models::ServerBinaryPacket;
 use shared::network::protocols::QuicBackend;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
@@ -18,7 +18,13 @@ impl Plugin for BrokerPlugin {
         app.add_systems(OnEnter(ServerState::Active), connect_to_broker)
             .add_systems(
                 Update,
-                (poll_broker, send_broker_heartbeat)
+                poll_broker
+                    .chain()
+                    .run_if(in_state(ServerState::Active)),
+            )
+            .add_systems(
+                PostUpdate,
+                (send_broker_commands, send_broker_heartbeat)
                     .chain()
                     .run_if(in_state(ServerState::Active)),
             );
@@ -30,6 +36,7 @@ pub struct BrokerConnection {
     pub peer: GamePeer,
     pub connection: Option<GameConnection>,
     pub topic: u32,
+    pub reliable_stream: Option<GameStream>,
 }
 
 fn connect_to_broker(
@@ -50,6 +57,7 @@ fn connect_to_broker(
         peer,
         connection: None,
         topic: shard_id_u32,
+        reliable_stream: None,
     });
 
     info!("🔗 Shard (ID: {}) tente de se connecter au Broker.", shard_id_u32);
@@ -69,6 +77,7 @@ fn poll_broker(
                 }
                 GameNetworkEvent::StreamCreated(conn, stream) => {
                     if stream.is_reliable() {
+                        broker.reliable_stream = Some(stream.clone());
                         let handshake = BrokerHandshakeShard {
                             shard_id: CustomId::from(broker.topic),
                         };
@@ -114,12 +123,40 @@ fn poll_broker(
                                 }
                             }
                         }
-                        _ => {}
+                        ShutdownServerOnEmpty::TAG => {
+                            if let Some(_) = ShutdownServerOnEmpty::try_from_bytes(data) {
+                                println!("Shutdown server on empty");
+                            }
+                        }
+                        HandoffRequest::TAG => {
+                            if let Some(pkt) = HandoffRequest::try_from_bytes(data) {
+                                ev_broker.write(BrokerEvent::SpawnGhostPlayer {
+                                    shard_id: pkt.shard_id,
+                                    client_id: pkt.entity_id,
+                                });
+                            }
+                        }
+                        TakeAuthority::TAG => {
+                            if let Some(pkt) = TakeAuthority::try_from_bytes(data) {
+                                ev_broker.write(BrokerEvent::TakeAuthority {
+                                    client_id: pkt.entity_id,
+                                });
+                            }
+                        }
+                        DropAuthority::TAG => {
+                            if let Some(pkt) = DropAuthority::try_from_bytes(data) {
+                                ev_broker.write(BrokerEvent::DropAuthority {
+                                    client_id: pkt.entity_id,
+                                });
+                            }
+                        }
+                        _ => warn!("Tag non reconnu : 0x{:02X}", data[0]),
                     }
                 }
                 GameNetworkEvent::Disconnected(_) => {
                     warn!("❌ Déconnecté du Broker !");
                     broker.connection = None;
+                    broker.reliable_stream = None;
                 }
                 _ => {}
             },
@@ -132,12 +169,58 @@ fn poll_broker(
     }
 }
 
+fn send_broker_commands(
+    broker: Res<BrokerConnection>,
+    mut ev_commands: MessageReader<BrokerCommand>,
+) {
+    let Some(conn) = &broker.connection else { return };
+
+    for command in ev_commands.read() {
+        match command {
+            BrokerCommand::SendWorldSync(sync_payload) => {
+                let publish_packet = Publish {
+                    topic_id: CustomId::from(broker.topic),
+                    payload: bitcode::encode(sync_payload),
+                };
+                let stream = GameStream::new(
+                    LogicalStream::WorldSync as u16,
+                    GameStreamReliability::Unreliable,
+                );
+
+                let _ = broker.peer.send(conn, &stream, publish_packet.to_bytes());
+            }
+            BrokerCommand::SendPositionUpdate { client_id, pos } => {
+                let packet = PositionUpdate {
+                    client_id: *client_id,
+                    pos: MathVec2::new(pos.x, pos.y),
+                };
+                let stream = GameStream::new(0, GameStreamReliability::Unreliable);
+
+                let _ = broker.peer.send(conn, &stream, packet.to_bytes());
+            }
+            BrokerCommand::SendHandoffAccept { shard_id, entity_id } => {
+                let Some(stream) = broker.reliable_stream.as_ref() else {
+                    warn!("Impossible d'envoyer HandoffAccept: stream fiable non initialisé");
+                    continue;
+                };
+
+                let accept = HandoffAccept {
+                    shard_id: *shard_id,
+                    entity_id: *entity_id,
+                };
+
+                let _ = broker.peer.send(conn, stream, accept.to_bytes());
+            }
+        }
+    }
+}
+
 fn send_broker_heartbeat(
     time: Res<Time>,
     mut heartbeat_timer: Local<Timer>,
     broker: Res<BrokerConnection>,
     config: Res<ServerConfig>,
-    player_query: Query<(), With<Player>>,
+    player_query: Query<(), (With<Player>, Without<Ghost>)>,
 ) {
     if heartbeat_timer.duration() == std::time::Duration::ZERO {
         *heartbeat_timer = Timer::from_seconds(1.0, TimerMode::Repeating);
