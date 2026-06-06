@@ -235,7 +235,9 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     state.routing_table.unsubscribe(shard_id, client_id);
 
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
-                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), data);
+                        let _ = peer.send(conn, state.shard_streams.get(&shard_id).unwrap(), ClientLeft {
+                            client_id: CustomId::from(client_id)
+                        }.to_bytes());
                     }
                 }
 
