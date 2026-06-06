@@ -1,6 +1,5 @@
 ﻿use bytes::{Buf, Bytes};
 use mathtools::Vec2;
-use crate::custom_id::CustomId;
 
 pub trait ServerBinaryPacket: Sized {
     const TAG: u8;
@@ -152,29 +151,6 @@ impl<const N: usize> BinaryField for [u8; N] {
     #[inline]
     fn write_to(&self, buf: &mut Vec<u8>) {
         buf.extend_from_slice(self);
-    }
-}
-
-pub struct PlayerData {
-    pub client_id: CustomId,
-    pub pos: Vec2<f32>,
-}
-
-impl BinaryField for PlayerData {
-    const MIN_SIZE: usize = CustomId::MIN_SIZE + <Vec2<f32> as BinaryField>::MIN_SIZE;
-
-    #[inline]
-    fn try_read_from(data: &mut Bytes) -> Option<Self> {
-        Some(Self {
-            client_id: CustomId::try_read_from(data)?,
-            pos: Vec2::try_read_from(data)?,
-        })
-    }
-
-    #[inline]
-    fn write_to(&self, buf: &mut Vec<u8>) {
-        self.client_id.write_to(buf);
-        self.pos.write_to(buf);
     }
 }
 

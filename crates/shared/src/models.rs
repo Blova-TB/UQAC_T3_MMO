@@ -1,5 +1,5 @@
-﻿pub use crate::custom_id::CustomId;
-pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket, PlayerData};
+pub use crate::custom_id::CustomId;
+pub use crate::models_trait_and_macro::{BinaryField, ServerBinaryPacket};
 use crate::{define_packet, define_packet_router};
 pub use mathtools::Vec2;
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,7 @@ define_packet! {
     }
 }
 
+// envoyé par le client au broker pour lui donner son jwt_token d'authentification qui a recu du GateKeeper
 define_packet! {
     BrokerHandshakeClient(0x06) {
         jwt_token: Vec<u8>,
@@ -205,16 +206,11 @@ define_packet! {
 
 // ========================================== 0x40 : CLIENT ==========================================
 
+// envoyé par le client au shard pour lui envoyer des inputs (ex: déplacement, actions, etc.)
 define_packet! {
-    ClientInput(0x40) {
+    ClientInput(0x41) {
         client_id: CustomId,
         input_data: [u8; 16],
-    }
-}
-
-define_packet!{
-    ServerSyncMessage(0x41) {
-        players: Vec<PlayerData>,
     }
 }
 
