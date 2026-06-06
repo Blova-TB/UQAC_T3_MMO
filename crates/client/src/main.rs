@@ -83,6 +83,8 @@ impl Default for PlayerInputBuffer {
 }
 
 // --- Composants ---
+#[derive(Component)]
+pub struct MainCamera;
 
 #[derive(Component)]
 pub struct NetworkEntity(pub u32);
@@ -147,7 +149,7 @@ fn main() {
         // Phase 4 : In Game (Réseau + Synchro ECS)
         .add_systems(
             Update,
-            (handle_ingame_network, sync_players_state).run_if(in_state(AppState::InGame)),
+            (handle_ingame_network, sync_players_state, camera_follow_local_player.after(sync_players_state)).run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             FixedUpdate,
@@ -161,9 +163,13 @@ fn main() {
 // --- Systèmes d'Initialisation ---
 
 fn setup_core(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera2d,
+        MainCamera,
+    ));
+
     commands.insert_resource(GameAssets {
-        player_sprite: asset_server.load("circle.png"), // Assurez-vous que cet asset existe dans assets/
+        player_sprite: asset_server.load("circle.png"),
     });
 }
 
@@ -516,6 +522,16 @@ fn handle_connection_handshake(
 }
 
 // --- Phase 4 : Boucle en Jeu ---
+fn camera_follow_local_player(
+    q_player: Query<&Transform, (With<LocalPlayer>, Without<MainCamera>)>,
+    mut q_camera: Query<&mut Transform, With<MainCamera>>,
+) {
+    let Ok(player_transform) = q_player.single() else { return; };
+    let Ok(mut camera_transform) = q_camera.single_mut() else { return; };
+
+    camera_transform.translation.x = player_transform.translation.x;
+    camera_transform.translation.y = player_transform.translation.y;
+}
 
 fn handle_ingame_network(
     mut state: ResMut<ClientState>,
