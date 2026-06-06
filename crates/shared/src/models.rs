@@ -12,6 +12,7 @@ pub enum Status {
     Online,
     Full,
     Closed,
+    Waiting,
 }
 
 // List of packets -----------------------------------------------------------

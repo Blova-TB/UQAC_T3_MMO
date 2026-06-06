@@ -99,6 +99,7 @@ fn poll_orchestrator(
 
 fn send_heartbeat(
     time: Res<Time>,
+    state: Res<State<ServerState>>,
     mut timer: ResMut<HeartbeatTimer>,
     config: Res<ServerConfig>,
     player_query: Query<(), With<Player>>,
@@ -110,12 +111,17 @@ fn send_heartbeat(
     let Some(conn) = orch_client.connection.as_ref() else { return; };
 
     let count = player_query.iter().count();
-    let status = if count >= config.max_players {
-        Status::Full
-    } else if count == 0 {
-        Status::Empty
-    } else {
-        Status::Online
+    let status = match state.get() {
+        ServerState::WaitingAssignment => Status::Waiting,
+        ServerState::Active => {
+            if count >= config.max_players {
+                Status::Full
+            } else if count == 0 {
+                Status::Empty
+            } else {
+                Status::Online
+            }
+        }
     };
 
     let payload = HeartbeatPayload {

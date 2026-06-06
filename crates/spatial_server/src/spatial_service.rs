@@ -182,7 +182,6 @@ impl SpatialService {
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
 
         let new_pos = update_data.pos;
-        println!("client_id: {:?} position : {:?} timestamp : {:?}", client_id, new_pos, Instant::now());
 
         let new_shard_id = self.quad_tree.shard_id_for(new_pos)?;
 
