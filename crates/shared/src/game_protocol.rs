@@ -1,10 +1,43 @@
 ﻿use bitcode::{Encode, Decode};
 
+// --- Constantes d'Input (Bitmask) ---
+pub const INPUT_UP: u8     = 1 << 0; // 0000 0001 (Avancer)
+pub const INPUT_DOWN: u8   = 1 << 1; // 0000 0010 (Reculer)
+pub const INPUT_LEFT: u8   = 1 << 2; // 0000 0100 (Gauche)
+pub const INPUT_RIGHT: u8  = 1 << 3; // 0000 1000 (Droite)
+pub const INPUT_ACTION: u8 = 1 << 4; // 0001 0000 (Action 'E')
+
+
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct PlayerInputPayload {
-    pub x: f32,
-    pub y: f32,
-    pub keys: u8,
+    pub inputs : [PlayerInput; 16],
+}
+
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct PlayerInput {
+    pub input: u8
+}
+
+impl PlayerInput {
+    pub fn is_up(&self) -> bool {
+        self.input & INPUT_UP != 0
+    }
+
+    pub fn is_down(&self) -> bool {
+        self.input & INPUT_DOWN != 0
+    }
+
+    pub fn is_left(&self) -> bool {
+        self.input & INPUT_LEFT != 0
+    }
+
+    pub fn is_right(&self) -> bool {
+        self.input & INPUT_RIGHT != 0
+    }
+
+    pub fn is_action(&self) -> bool {
+        self.input & INPUT_ACTION != 0
+    }
 }
 
 #[derive(Debug, Clone, Encode, Decode)]

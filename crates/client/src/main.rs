@@ -5,9 +5,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use tokio::runtime::Runtime;
 use std::collections::HashMap;
 use std::time::Duration;
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStreamReliability};
+use shared::game_protocol::{LogicalStream, PlayerInput, PlayerInputPayload, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP};
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
-use shared::models::{BrokerHandshakeClient, ServerSyncMessage, PlayerData, ServerBinaryPacket};
+use shared::models::{BrokerHandshakeClient, ServerSyncMessage, PlayerData, ServerBinaryPacket, Publish, CustomId};
 use shared::web_models::Claims;
 
 // --- Ressources ---
@@ -67,6 +68,18 @@ pub struct GameAssets {
     pub player_sprite: Handle<Image>,
 }
 
+#[derive(Resource)]
+pub struct PlayerInputBuffer {
+    /// Index 0 = Frame actuelle. Index 15 = Frame la plus ancienne.
+    pub history: [u8; 16],
+}
+
+impl Default for PlayerInputBuffer {
+    fn default() -> Self {
+        Self { history: [0; 16] }
+    }
+}
+
 // --- Composants ---
 
 #[derive(Component)]
@@ -105,6 +118,8 @@ fn main() {
         .init_state::<AppState>()
         .init_resource::<TokioRuntime>()
         .init_resource::<AuthFormState>()
+        .init_resource::<PlayerInputBuffer>()
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_message::<NetworkSnapshotEvent>()
 
         .add_systems(Startup, setup_core)
@@ -128,6 +143,15 @@ fn main() {
         // Phase 4 : In Game (Réseau + Synchro ECS)
         .add_systems(Update, (handle_ingame_network, sync_players_state).run_if(in_state(AppState::InGame)))
 
+        .add_systems(
+            FixedUpdate,
+            (
+                gather_and_store_inputs,
+                broadcast_player_inputs
+            )
+                .chain()
+                .run_if(in_state(AppState::InGame))
+        )
         .run();
 }
 
@@ -496,4 +520,46 @@ fn sync_players_state(
             commands.entity(*entity).despawn();
         }
     }
+}
+
+fn gather_and_store_inputs(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut input_buffer: ResMut<PlayerInputBuffer>,
+) {
+    let mut current_frame_input = 0u8;
+
+    if keyboard.pressed(KeyCode::KeyW)||keyboard.pressed(KeyCode::KeyZ) { current_frame_input |= INPUT_UP; }
+    if keyboard.pressed(KeyCode::KeyS) { current_frame_input |= INPUT_DOWN; }
+    if keyboard.pressed(KeyCode::KeyA) { current_frame_input |= INPUT_LEFT; }
+    if keyboard.pressed(KeyCode::KeyD) { current_frame_input |= INPUT_RIGHT; }
+    if keyboard.pressed(KeyCode::KeyE) { current_frame_input |= INPUT_ACTION; }
+
+    // pas opti mais tant pis
+    input_buffer.history.copy_within(0..15, 1);
+
+    input_buffer.history[0] = current_frame_input;
+}
+
+fn broadcast_player_inputs(
+    input_buffer: Res<PlayerInputBuffer>,
+    state: Res<ClientState>,
+    session: Res<SessionData>,
+) {
+    let Some(conn) = &state.connection else { return };
+
+    let sync_payload = PlayerInputPayload {
+        inputs: input_buffer.history.map(|input| PlayerInput { input }),
+    };
+
+    let publish_packet = Publish {
+        topic_id: CustomId::from(session.custom_id),
+        payload: bitcode::encode(&sync_payload),
+    };
+
+    let stream = GameStream::new(
+        LogicalStream::Input as u16,
+        GameStreamReliability::Unreliable
+    );
+
+    let _ = state.peer.send(conn, &stream, publish_packet.to_bytes());
 }
