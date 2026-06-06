@@ -71,19 +71,26 @@ define_packet! {
 }
 
 define_packet! {
-    BrokerHandshakeClient(0x05) {
+    BroadcastClient(0x05) {
+        client_id: CustomId,
+        payload: Vec<u8>,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeClient(0x06) {
         jwt_token: Vec<u8>,
     }
 }
 
 define_packet! {
-    BrokerHandshakeShard(0x06) {
+    BrokerHandshakeShard(0x07) {
         shard_id: CustomId,
     }
 }
 
 define_packet! {
-    BrokerHandshakeSpatial(0x07) {
+    BrokerHandshakeSpatial(0x08) {
         magic: u32,
     }
 }
