@@ -2,11 +2,8 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bevy::prelude::*;
 use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use shared::game_protocol::{
-    CustomId, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP, LogicalStream,
-    PlayerData, PlayerInput, PlayerInputPayload, WorldSyncPayload,
-};
-use shared::models::{BrokerHandshakeClient, Publish, ServerBinaryPacket};
+use shared::game_protocol::{CustomId, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP, LogicalStream, PlayerData, PlayerInput, PlayerInputPayload, GameMessage};
+use shared::models::{Broadcast, BrokerHandshakeClient, Publish, RefuseClient, ServerBinaryPacket};
 use shared::network::protocols::QuicBackend;
 use shared::network::{
     GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability,
@@ -523,20 +520,45 @@ fn handle_connection_handshake(
 fn handle_ingame_network(
     mut state: ResMut<ClientState>,
     mut ev_snapshot: MessageWriter<NetworkSnapshotEvent>,
-    mut exit: MessageWriter<AppExit>,
+    mut next_state: ResMut<NextState<AppState>>,
 ) {
     while let Ok(Some(event)) = state.peer.poll() {
         match event {
-            GameNetworkEvent::Message { data, .. } => {
-                // on utilise bitcode pour décoder les messages binaires du serveur
-                if let Some(msg) = bitcode::decode::<WorldSyncPayload>(&data).ok() {
-                    ev_snapshot.write(NetworkSnapshotEvent {
-                        players: msg.entities,
-                    });
+            GameNetworkEvent::Message {stream, data, .. } => {
+                if data.is_empty() { return; }
+                let tag = data[0];
+
+                match tag {
+                    Broadcast::TAG => {
+                        let Some(pkt) = Broadcast::try_from_bytes(data) else { return; };
+                        if let Some(game_message) = GameMessage::decode(stream.stream_id, &pkt.payload) {
+                            match game_message {
+                                GameMessage::WorldSync(sync_data) => {
+                                    ev_snapshot.write(NetworkSnapshotEvent {
+                                        players: sync_data.entities,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            eprintln!("⚠️ Impossible de décoder le payload métier sur le stream : {}", stream.stream_id);
+                        }
+                    }
+                    RefuseClient::TAG => {
+                        eprintln!("❌ Le Broker a refusé la connexion du client.");
+
+                        // on retourne à l'écran d'authentification pour laisser l'utilisateur tenter une nouvelle connexion
+                        next_state.set(AppState::AuthMenu);
+                    }
+                    _ => {}
                 }
             }
             GameNetworkEvent::Disconnected(_) => {
-                exit.write(AppExit::Success);
+                println!("Client : Session fermée par le Broker.");
+                next_state.set(AppState::AuthMenu);
+            }
+            GameNetworkEvent::Error { inner, .. } => {
+                eprintln!("Client : Perte de paquets ou erreur d'exécution réseau : {:?}", inner);
             }
             _ => {}
         }
@@ -606,7 +628,7 @@ fn gather_and_store_inputs(
     if keyboard.pressed(KeyCode::KeyS) {
         current_frame_input |= INPUT_DOWN;
     }
-    if keyboard.pressed(KeyCode::KeyA) {
+    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::KeyQ){
         current_frame_input |= INPUT_LEFT;
     }
     if keyboard.pressed(KeyCode::KeyD) {

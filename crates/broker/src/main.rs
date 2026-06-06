@@ -190,11 +190,17 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
 
                 Publish::TAG => {
                     let Some(pkt) = Publish::try_from_bytes(data) else { return; };
-
-                    let broadcast = Broadcast { payload: pkt.payload };
-                    let final_msg = broadcast.to_bytes();
                     let topic_u32: u32 = pkt.topic_id.into();
-
+                    let final_msg = if let Some(&sender_client_id) = state.conn_to_client.get(&connection) {
+                        BroadcastClient {
+                            client_id: CustomId::from(sender_client_id),
+                            payload: pkt.payload,
+                        }.to_bytes()
+                    } else {
+                        Broadcast {
+                            payload: pkt.payload,
+                        }.to_bytes()
+                    };
                     if let Some(subscribers) = state.routing_table.get_subscribers(&topic_u32) {
                         for &sub_id in subscribers {
                             if let Some(client_conn) = state.client_to_conn.get(&sub_id) {

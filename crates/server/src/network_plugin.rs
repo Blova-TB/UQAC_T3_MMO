@@ -7,13 +7,13 @@ use crate::{ServerState, orchestrator_plugin::AssignedShard};
 use crate::config::ServerConfig;
 use crate::player::Player;
 
-use shared::game_protocol::{LogicalStream, WorldSyncPayload};
+use shared::game_protocol::{LogicalStream, PlayerData, WorldSyncPayload};
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use shared::network::protocols::QuicBackend;
 
 use shared::models::{
-    BrokerHandshakeShard, ClientLeft, SpawnPlayerShard, PositionUpdate, Publish, ServerSyncMessage, ServerBinaryPacket,
-    PlayerData, Vec2 as MathVec2, ServerHeartBeat
+    BrokerHandshakeShard, ClientLeft, SpawnPlayerShard, PositionUpdate, Publish, ServerBinaryPacket,
+    Vec2 as MathVec2, ServerHeartBeat
 };
 use shared::custom_id::CustomId;
 
@@ -187,7 +187,10 @@ fn broadcast_sync_to_clients(
         let pos = transform.translation.truncate();
         let client_id: u32 = client.id.into();
 
-        entities_data.push((client_id, (pos.x, pos.y)));
+        entities_data.push(PlayerData{
+            client_id: CustomId::from(client_id),
+            pos: (pos.x, pos.y),
+        });
     }
 
     let sync_payload = WorldSyncPayload {

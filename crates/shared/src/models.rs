@@ -71,13 +71,27 @@ define_packet! {
 }
 
 define_packet! {
-    BrokerHandshakeShard(0x06) {
+    BroadcastClient(0x05) {
+        client_id: CustomId,
+        payload: Vec<u8>,
+    }
+}
+
+// envoyé par le client au broker pour lui donner son jwt_token d'authentification qui a recu du GateKeeper
+define_packet! {
+    BrokerHandshakeClient(0x06) {
+        jwt_token: Vec<u8>,
+    }
+}
+
+define_packet! {
+    BrokerHandshakeShard(0x07) {
         shard_id: CustomId,
     }
 }
 
 define_packet! {
-    BrokerHandshakeSpatial(0x07) {
+    BrokerHandshakeSpatial(0x08) {
         magic: u32,
     }
 }
@@ -191,13 +205,6 @@ define_packet! {
 }
 
 // ========================================== 0x40 : CLIENT ==========================================
-
-// envoyé par le client au broker pour lui donner son jwt_token d'authentification qui a recu du GateKeeper
-define_packet! {
-    BrokerHandshakeClient(0x40) {
-        jwt_token: Vec<u8>,
-    }
-}
 
 // envoyé par le client au shard pour lui envoyer des inputs (ex: déplacement, actions, etc.)
 define_packet! {
