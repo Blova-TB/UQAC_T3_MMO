@@ -124,15 +124,14 @@ impl QuadTree {
         current_node.players.insert(client_id, new_pos)
     }
 
-    pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<()> {
+    pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<Vec2<f32>> {
         let mut current_node = self;
 
         for quadrant in shard_id.id_to_path() {
             current_node = current_node.get_shard_mut(quadrant)?;
         };
-
-        current_node.players.remove(&client_id)?;
-        Some(())
+        
+        Some(current_node.players.remove(&client_id)?)
     }
 
     pub fn subdivide_quad_tree(&mut self) -> (Vec<(ClientId, ShardId, Vec2<f32>)>,Vec<(ClientId,Vec2<f32>)>) {
