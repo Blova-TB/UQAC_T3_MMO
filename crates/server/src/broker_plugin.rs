@@ -1,0 +1,160 @@
+﻿use crate::config::ServerConfig;
+use crate::core::AssignedShard;
+use crate::events::{BrokerEvent};
+use crate::player::Player;
+use crate::states::ServerState;
+use bevy::prelude::*;
+use shared::custom_id::CustomId;
+use shared::game_protocol::GameMessage;
+use shared::models::{BrokerHandshakeShard, ClientLeft, SpawnPlayerShard, ServerHeartBeat, BroadcastClient};
+use shared::models::ServerBinaryPacket;
+use shared::network::protocols::QuicBackend;
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
+
+pub struct BrokerPlugin;
+
+impl Plugin for BrokerPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(OnEnter(ServerState::Active), connect_to_broker)
+            .add_systems(
+                Update,
+                (poll_broker, send_broker_heartbeat)
+                    .chain()
+                    .run_if(in_state(ServerState::Active)),
+            );
+    }
+}
+
+#[derive(Resource)]
+pub struct BrokerConnection {
+    pub peer: GamePeer,
+    pub connection: Option<GameConnection>,
+    pub topic: u32,
+}
+
+fn connect_to_broker(
+    mut commands: Commands,
+    config: Res<ServerConfig>,
+    assigned_shard: Res<AssignedShard>,
+) {
+    let peer = GamePeer::new(QuicBackend::new());
+    let addr: std::net::SocketAddr = config.broker_addr.parse().expect("❌ BROKER_ADDR invalide");
+
+    peer.connect(&addr.ip().to_string(), addr.port()).unwrap_or_else(|e| {
+        panic!("Échec de connexion au Broker sur {}: {:?}", config.broker_addr, e);
+    });
+
+    let shard_id_u32 = assigned_shard.0.as_u32();
+
+    commands.insert_resource(BrokerConnection {
+        peer,
+        connection: None,
+        topic: shard_id_u32,
+    });
+
+    info!("🔗 Shard (ID: {}) tente de se connecter au Broker.", shard_id_u32);
+}
+
+fn poll_broker(
+    mut broker: ResMut<BrokerConnection>,
+    mut ev_broker: MessageWriter<BrokerEvent>,
+) {
+    loop {
+        match broker.peer.poll() {
+            Ok(Some(event)) => match event {
+                GameNetworkEvent::Connected(conn) => {
+                    info!("✅ Connecté au Broker avec succès !");
+                    broker.connection = Some(conn);
+                    let _ = broker.peer.create_stream(conn, GameStreamReliability::Reliable);
+                }
+                GameNetworkEvent::StreamCreated(conn, stream) => {
+                    if stream.is_reliable() {
+                        let handshake = BrokerHandshakeShard {
+                            shard_id: CustomId::from(broker.topic),
+                        };
+                        let _ = broker.peer.send(&conn, &stream, handshake.to_bytes());
+                        info!("🌍 Shard Handshake envoyé !");
+                    }
+                }
+                GameNetworkEvent::Message { stream, data, .. } => {
+                    if data.is_empty() {
+                        continue;
+                    }
+
+                    match data[0] {
+                        SpawnPlayerShard::TAG => {
+                            if let Some(pkt) = SpawnPlayerShard::try_from_bytes(data) {
+                                ev_broker.write(BrokerEvent::SpawnPlayer {
+                                    client_id: pkt.client_id,
+                                    pos: Vec2::new(pkt.pos.x, pkt.pos.y),
+                                });
+                            }
+                        }
+                        ClientLeft::TAG => {
+                            if let Some(pkt) = ClientLeft::try_from_bytes(data) {
+                                ev_broker.write(BrokerEvent::PlayerLeft {
+                                    client_id: pkt.client_id,
+                                });
+                            }
+                        }
+                        BroadcastClient::TAG => {
+                            if let Some(pkt) = BroadcastClient::try_from_bytes(data) {
+                                if let Some(game_message) =
+                                    GameMessage::decode(stream.stream_id, &pkt.payload)
+                                {
+                                    match game_message {
+                                        GameMessage::Input(input_payload) => {
+                                            ev_broker.write(BrokerEvent::PlayerInput {
+                                                client_id: pkt.client_id,
+                                                payload: input_payload,
+                                            });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                GameNetworkEvent::Disconnected(_) => {
+                    warn!("❌ Déconnecté du Broker !");
+                    broker.connection = None;
+                }
+                _ => {}
+            },
+            Ok(None) => break,
+            Err(e) => {
+                error!("Erreur de polling Broker : {:?}", e);
+                break;
+            }
+        }
+    }
+}
+
+fn send_broker_heartbeat(
+    time: Res<Time>,
+    mut heartbeat_timer: Local<Timer>,
+    broker: Res<BrokerConnection>,
+    config: Res<ServerConfig>,
+    player_query: Query<(), With<Player>>,
+) {
+    if heartbeat_timer.duration() == std::time::Duration::ZERO {
+        *heartbeat_timer = Timer::from_seconds(1.0, TimerMode::Repeating);
+    }
+
+    let Some(conn) = &broker.connection else { return };
+
+    if heartbeat_timer.tick(time.delta()).just_finished() {
+        let player_count = player_query.iter().count();
+        let occupancy_percent = (player_count.saturating_mul(100) / config.max_players.max(1)).min(100) as u8;
+
+        let packet = ServerHeartBeat {
+            shard_id: CustomId::from(broker.topic),
+            occupancy: occupancy_percent,
+        };
+
+        let stream = GameStream::new(0, GameStreamReliability::Unreliable);
+        let _ = broker.peer.send(conn, &stream, packet.to_bytes());
+    }
+}

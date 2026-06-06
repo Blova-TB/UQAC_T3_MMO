@@ -1,33 +1,23 @@
-﻿//TODO si on a le temps, un système de reconnexion si l'orchestrator crash
+﻿use crate::config::ServerConfig;
+use crate::core::AssignedShard;
+use crate::player::Player;
+use crate::states::ServerState;
 use bevy::prelude::*;
 use bytes::Bytes;
 use serde::Serialize;
-use std::net::SocketAddr;
-
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
-use shared::network::protocols::QuicBackend;
 use shared::constants::STREAM_HEARTBEAT;
-use shared::models::{ServerBinaryPacket, AssignShard, Status};
-use shared::custom_id::CustomId;
-
-use crate::player::Player;
-use crate::ServerState;
-use crate::config::ServerConfig;
+use shared::models::{AssignShard, ServerBinaryPacket, Status};
+use shared::network::protocols::QuicBackend;
+use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
+use std::net::SocketAddr;
 
 pub struct OrchestratorPlugin;
 
 impl Plugin for OrchestratorPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .insert_resource(HeartbeatTimer(Timer::from_seconds(
-                5.0,
-                TimerMode::Repeating,
-            )))
+        app.insert_resource(HeartbeatTimer(Timer::from_seconds(5.0, TimerMode::Repeating)))
             .add_systems(Startup, connect_to_orchestrator)
-            .add_systems(Update, (
-                poll_orchestrator,
-                send_heartbeat,
-            ).chain());
+            .add_systems(Update, (poll_orchestrator, send_heartbeat).chain());
     }
 }
 
@@ -36,7 +26,7 @@ pub struct HeartbeatPayload {
     pub id: String,
     pub player_count: usize,
     pub max_players: usize,
-    pub status: Status
+    pub status: Status,
 }
 
 #[derive(Resource)]
@@ -46,23 +36,14 @@ pub struct OrchestratorClient {
 }
 
 #[derive(Resource)]
-pub struct AssignedShard(pub CustomId);
-
-#[derive(Resource)]
 pub struct HeartbeatTimer(pub Timer);
 
 fn connect_to_orchestrator(mut commands: Commands, config: Res<ServerConfig>) {
-    let client_backend = QuicBackend::new();
-    let client_peer = GamePeer::new(client_backend);
+    let client_peer = GamePeer::new(QuicBackend::new());
+    let addr = config.orchestrator_addr.parse::<SocketAddr>().expect("❌ IP:PORT invalide");
 
-    let addr = config.orchestrator_addr.parse::<SocketAddr>()
-        .expect("❌ L'adresse de l'orchestrateur est mal formatée (attendu: IP:PORT)");
-
-    let orch_ip = addr.ip().to_string();
-    let orch_port = addr.port();
-
-    client_peer.connect(&orch_ip, orch_port).unwrap_or_else(|e| {
-        eprintln!("⚠️ Impossible d'initier la connexion à l'orchestrateur : {:?}", e);
+    client_peer.connect(&addr.ip().to_string(), addr.port()).unwrap_or_else(|e| {
+        error!("⚠️ Impossible de se connecter à l'orchestrateur : {:?}", e);
     });
 
     commands.insert_resource(OrchestratorClient {
@@ -70,7 +51,7 @@ fn connect_to_orchestrator(mut commands: Commands, config: Res<ServerConfig>) {
         connection: None,
     });
 
-    println!("🚀 Client Orchestrateur initialisé vers : {}:{}", orch_ip, orch_port);
+    info!("🚀 Client Orchestrateur initialisé vers : {}", addr);
 }
 
 fn poll_orchestrator(
@@ -84,36 +65,30 @@ fn poll_orchestrator(
         match orch_client.peer.poll() {
             Ok(Some(event)) => match event {
                 GameNetworkEvent::Connected(conn) => {
-                    println!("🔗 Connecté à l'orchestrateur ! En attente d'assignation...");
+                    info!("🔗 Connecté à l'orchestrateur ! En attente d'assignation...");
                     orch_client.connection = Some(conn);
                     let _ = orch_client.peer.create_stream(conn, GameStreamReliability::Reliable);
                 }
-                GameNetworkEvent::Message { mut data, .. } => {
+                GameNetworkEvent::Message { data, .. } => {
                     if data.is_empty() { continue; }
-                    let tag = data[0];
 
-                    if tag == AssignShard::TAG {
+                    if data[0] == AssignShard::TAG {
                         if let Some(packet) = AssignShard::try_from_bytes(data) {
-                            println!("🎯 Ordre reçu ! Ce serveur devient la Shard : {:?}", packet.shard_id);
-
+                            info!("🎯 Ordre reçu ! Ce serveur devient la Shard : {:?}", packet.shard_id);
                             commands.insert_resource(AssignedShard(packet.shard_id));
-
                             next_state.set(ServerState::Active);
                         }
                     }
                 }
                 GameNetworkEvent::Disconnected(_) => {
-                    println!("⚠️ Connexion à l'orchestrateur perdue.");
+                    warn!("⚠️ Connexion à l'orchestrateur perdue.");
                     orch_client.connection = None;
-                }
-                GameNetworkEvent::Error { inner, .. } => {
-                    eprintln!("❌ Erreur avec l'orchestrateur : {:?}", inner);
                 }
                 _ => {}
             },
             Ok(None) => break,
             Err(e) => {
-                eprintln!("💥 Le thread réseau a crashé : {:?}", e);
+                error!("💥 Le thread réseau Orchestrateur a crashé : {:?}", e);
                 let _ = orch_client.peer.shutdown();
                 commands.remove_resource::<OrchestratorClient>();
                 break;
@@ -126,19 +101,22 @@ fn send_heartbeat(
     time: Res<Time>,
     mut timer: ResMut<HeartbeatTimer>,
     config: Res<ServerConfig>,
-    player_query: Query<Entity, With<Player>>,
+    player_query: Query<(), With<Player>>,
     orch_client_opt: Option<ResMut<OrchestratorClient>>,
 ) {
     let Some(orch_client) = orch_client_opt else { return };
+    if !timer.0.tick(time.delta()).just_finished() { return; }
 
-    if !timer.0.tick(time.delta()).just_finished() {
-        return;
-    }
-
-    let conn = orch_client.connection.as_ref().unwrap();
+    let Some(conn) = orch_client.connection.as_ref() else { return; };
 
     let count = player_query.iter().count();
-    let status = if count >= config.max_players { Status::Full } else if count == 0 { Status::Empty } else { Status::Online };
+    let status = if count >= config.max_players {
+        Status::Full
+    } else if count == 0 {
+        Status::Empty
+    } else {
+        Status::Online
+    };
 
     let payload = HeartbeatPayload {
         id: config.id.clone(),
@@ -148,13 +126,9 @@ fn send_heartbeat(
     };
 
     if let Ok(json_bytes) = serde_json::to_vec(&payload) {
-        let bytes_data = Bytes::from(json_bytes);
-        let heartbeat_stream = GameStream::new(STREAM_HEARTBEAT, GameStreamReliability::Unreliable);
-
-        if let Err(e) = orch_client.peer.send(conn, &heartbeat_stream, bytes_data) {
-            eprintln!("❌ Échec de l'envoi du heartbeat: {:?}", e);
-        } else {
-            println!("💓 Heartbeat expédié ({} joueurs)", count);
+        let stream = GameStream::new(STREAM_HEARTBEAT, GameStreamReliability::Unreliable);
+        if let Err(e) = orch_client.peer.send(conn, &stream, Bytes::from(json_bytes)) {
+            error!("❌ Échec de l'envoi du heartbeat: {:?}", e);
         }
     }
 }

@@ -22,6 +22,7 @@ impl Plugin for GamePlugin {
                     sync_players_state,
                     interpolate_transforms,
                     camera_follow_local_player.after(sync_players_state),
+                    draw_background_grid,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
@@ -141,6 +142,37 @@ fn camera_follow_local_player(
 
     camera_transform.translation.x = player_transform.translation.x;
     camera_transform.translation.y = player_transform.translation.y;
+    println!("\r{:?}", camera_transform);
+}
+
+fn draw_background_grid(
+    mut gizmos: Gizmos,
+    q_camera: Query<&Transform, With<MainCamera>>,
+) {
+    let Ok(camera) = q_camera.single() else { return; };
+    let cam_pos = camera.translation.truncate();
+
+    let grid_size = 64.0;
+    let extents = 1200.0;
+
+    let start_x = ((cam_pos.x - extents) / grid_size).floor() * grid_size;
+    let start_y = ((cam_pos.y - extents) / grid_size).floor() * grid_size;
+    let end_x = start_x + extents * 2.0;
+    let end_y = start_y + extents * 2.0;
+
+    let grid_color = Color::srgba(1.0, 1.0, 1.0, 0.05);
+
+    let mut x = start_x;
+    while x <= end_x {
+        gizmos.line_2d(Vec2::new(x, start_y), Vec2::new(x, end_y), grid_color);
+        x += grid_size;
+    }
+
+    let mut y = start_y;
+    while y <= end_y {
+        gizmos.line_2d(Vec2::new(start_x, y), Vec2::new(end_x, y), grid_color);
+        y += grid_size;
+    }
 }
 
 fn gather_and_store_inputs(
