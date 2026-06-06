@@ -182,9 +182,17 @@ define_packet! {
     }
 }
 
+// envoyé par le shard au spatial pour dire qu'il doit faire despawn ce client
+define_packet! {
+    DespawnPlayerShard(0x31) {
+        shard_id: CustomId,
+        client_id: CustomId,
+    }
+}
+
 // envoyé par le shard notamment au spatial pour la gestion du QuadTree (merge/split)
 define_packet! {
-    ServerHeartBeat(0x31) {
+    ServerHeartBeat(0x32) {
         shard_id: CustomId,
         occupancy: u8,
     }
@@ -192,14 +200,14 @@ define_packet! {
 
 // envoyé par l'orchestrateur pour dire à un shard de prendre en charge une zone du monde
 define_packet! {
-    AssignShard(0x32) {
+    AssignShard(0x33) {
         shard_id: CustomId,
     }
 }
 
 // envoyé par le Broker au shard pour lui dire qu'un client vient de se déconnecter
 define_packet! {
-    ClientLeft(0x33) {
+    ClientLeft(0x34) {
         client_id: CustomId,
     }
 }
