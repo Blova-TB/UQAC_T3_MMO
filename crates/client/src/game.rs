@@ -142,7 +142,6 @@ fn camera_follow_local_player(
 
     camera_transform.translation.x = player_transform.translation.x;
     camera_transform.translation.y = player_transform.translation.y;
-    println!("\r{:?}", camera_transform);
 }
 
 fn draw_background_grid(
