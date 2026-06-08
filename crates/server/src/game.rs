@@ -140,6 +140,14 @@ fn handle_broker_events(
             BrokerEvent::ShutdownRequested => {
                 commands.insert_resource(PendingShutdown(true));
             }
+
+            BrokerEvent::HandoffDrop{ client_id } => {
+                let id_u32: u32 = (*client_id).into();
+                if let Some(&entity) = client_entities.0.get(&id_u32) {
+                    commands.entity(entity).despawn();
+                    info!("🪓 Entité {} tuée", id_u32);
+                }
+            }
         }
     }
 }

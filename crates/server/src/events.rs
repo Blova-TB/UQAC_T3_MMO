@@ -28,6 +28,9 @@ pub enum BrokerEvent {
     DropAuthority {
         client_id: CustomId,
     },
+    HandoffDrop {
+        client_id: CustomId,
+    },
     ShutdownRequested,
 }
 

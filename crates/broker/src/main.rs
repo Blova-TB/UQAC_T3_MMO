@@ -347,6 +347,8 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         let _ = peer.send(conn, state.shard_streams.get(&new_shard_id).unwrap(), take_pkt);
                     }
 
+                    state.routing_table.subscribe(pkt.entity_id.into(), new_shard_id);
+
                     if let Some(conn) = state.shard_conns.get(&old_shard_id) {
                         let drop_pkt = DropAuthority {
                             entity_id: pkt.entity_id,

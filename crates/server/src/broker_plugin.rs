@@ -6,7 +6,7 @@ use crate::states::ServerState;
 use bevy::prelude::*;
 use shared::custom_id::CustomId;
 use shared::game_protocol::{GameMessage, LogicalStream};
-use shared::models::{BroadcastClient, BrokerHandshakeShard, ClientLeft, DropAuthority, HandoffAccept, HandoffRequest, PositionUpdate, Publish, ServerHeartBeat, ShutdownServerOnEmpty, SpawnPlayerShard, TakeAuthority, Vec2 as MathVec2};
+use shared::models::{BroadcastClient, BrokerHandshakeShard, ClientLeft, DropAuthority, HandoffAccept, HandoffDrop, HandoffRequest, PositionUpdate, Publish, ServerHeartBeat, ShutdownServerOnEmpty, SpawnPlayerShard, TakeAuthority, Vec2 as MathVec2};
 use shared::models::ServerBinaryPacket;
 use shared::network::protocols::QuicBackend;
 use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
@@ -148,6 +148,13 @@ fn poll_broker(
                         DropAuthority::TAG => {
                             if let Some(pkt) = DropAuthority::try_from_bytes(data) {
                                 ev_broker.write(BrokerEvent::DropAuthority {
+                                    client_id: pkt.entity_id,
+                                });
+                            }
+                        }
+                        HandoffDrop::TAG => {
+                            if let Some(pkt) = DropAuthority::try_from_bytes(data) {
+                                ev_broker.write(BrokerEvent::HandoffDrop {
                                     client_id: pkt.entity_id,
                                 });
                             }
