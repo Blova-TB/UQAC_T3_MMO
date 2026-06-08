@@ -268,7 +268,7 @@ impl SpatialService {
                 // si le client attendait pour cross dans cette shard
                 self.client_waiting_for_crossing.remove(&client_id);
 
-                let &new_pos= self.quad_tree.get_shard_by_id(shard_id.into()?)?.players.get(&client_id)?;
+                let &new_pos= self.quad_tree.get_shard_by_id(shard_id)?.players.get(&client_id)?;
 
                 let handoff_complete = HandoffComplete {
                     new_shard_id: shard_id.into(),
