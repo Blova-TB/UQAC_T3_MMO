@@ -23,10 +23,10 @@ fn main() {
     let mut spatial_service = SpatialService::new(
         Rect {
             min: Vec2::new(0.0, 0.0),
-            max: Vec2::new(1000.0, 1000.0)
+            max: Vec2::new(100000.0, 100000.0)
         },
         1,
-        10.0,
+        1000.0,
         70,
         50,
         15.0,
@@ -150,7 +150,7 @@ fn main() {
             }
         }
 
-        let json = visualizer::extract_viz_state(&spatial_service.quad_tree);
+        let json = visualizer::extract_viz_state(&spatial_service.quad_tree, spatial_service.margin);
         if let Ok(mut lock) = shared_state.write() {
             *lock = json;
         }

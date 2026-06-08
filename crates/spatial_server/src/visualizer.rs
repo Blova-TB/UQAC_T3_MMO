@@ -29,6 +29,7 @@ pub struct VizShard {
     pub rect: VizRect,
     pub id: u32,
     pub depth: u8,
+    pub margin: f32,
 }
 
 #[derive(Serialize)]
@@ -40,7 +41,7 @@ pub struct VizPlayer {
 
 // --- Logique d'extraction ---
 
-pub fn extract_viz_state(tree: &QuadTree) -> String {
+pub fn extract_viz_state(tree: &QuadTree, margin: f32) -> String {
     let mut state = VizState {
         bounds: viz_rect(&tree.bounds),
         shards: Vec::new(),
@@ -48,10 +49,10 @@ pub fn extract_viz_state(tree: &QuadTree) -> String {
     };
 
     // Fonction récursive pour parcourir l'arbre
-    fn traverse(node: &QuadTree, state: &mut VizState) {
+    fn traverse(node: &QuadTree, state: &mut VizState, margin: f32) {
         if let Some(children) = &node.children {
             for child in children.iter() {
-                traverse(child, state);
+                traverse(child, state, margin);
             }
         } else {
             // C'est une feuille (un vrai Shard)
@@ -59,6 +60,7 @@ pub fn extract_viz_state(tree: &QuadTree) -> String {
                 rect: viz_rect(&node.bounds),
                 id: node.shard_id.map(|id| id.into()).unwrap_or(0),
                 depth: node.depth,
+                margin,
             });
 
             // Ajouter les joueurs de cette feuille
@@ -72,7 +74,7 @@ pub fn extract_viz_state(tree: &QuadTree) -> String {
         }
     }
 
-    traverse(tree, &mut state);
+    traverse(tree, &mut state, margin);
     serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_string())
 }
 

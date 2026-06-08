@@ -324,7 +324,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     let entity_id: u32 = pkt.entity_id.into();
 
                     // on desabonne le game server du client (position et input)
-                    state.routing_table.unsubscribe(entity_id, shard_id);
+                    state.routing_table.unsubscribe(shard_id, entity_id);
 
                     // on forward la requete de drop au shard concerné
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
@@ -355,6 +355,8 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         }.to_bytes();
                         let _ = peer.send(conn, state.shard_streams.get(&old_shard_id).unwrap(), drop_pkt);
                     }
+
+                    state.routing_table.unsubscribe(pkt.entity_id.into(), old_shard_id);
                 }
 
                 ShutdownServerOnEmpty::TAG => {

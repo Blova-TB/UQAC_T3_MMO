@@ -81,9 +81,11 @@ fn sync_players_state(
             .iter_mut()
             .map(|(e, net_id, target)| (net_id.0, (e, target)))
             .collect();
-
+        let mut id_counter = HashMap::<u32, u32>::new();
         for server_player in &event.players {
             let pid = server_player.client_id.as_u32();
+            id_counter.entry(pid).and_modify(|v| *v += 1).or_insert(1);
+            //println!("Set player position id : {:?}, pos : {:?}", pid, server_player.pos);
 
             if let Some((_, target_pos)) = existing_entities.get_mut(&pid) {
                 target_pos.0 = Vec2::from(server_player.pos);
@@ -104,6 +106,7 @@ fn sync_players_state(
                     NetworkEntity(pid),
                     TargetPosition(Vec2::from(server_player.pos)),
                 ));
+                //println!("Spawn new entity id : {:?}", pid);
 
                 if pid == session.custom_id {
                     entity_cmds.insert(LocalPlayer);
@@ -111,9 +114,12 @@ fn sync_players_state(
             }
         }
 
+        /*
         for (entity, _) in existing_entities.values() {
             commands.entity(*entity).despawn();
         }
+         */
+        println!("Players state: {:?}", id_counter);
     }
 }
 
