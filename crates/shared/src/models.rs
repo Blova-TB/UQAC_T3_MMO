@@ -128,7 +128,6 @@ define_packet! {
     HandoffAccept(0x12) {
         shard_id: CustomId,
         entity_id: CustomId,
-        pos: Vec<f32>
     }
 }
 
