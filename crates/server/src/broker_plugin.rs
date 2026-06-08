@@ -125,7 +125,8 @@ fn poll_broker(
                         }
                         ShutdownServerOnEmpty::TAG => {
                             if let Some(_) = ShutdownServerOnEmpty::try_from_bytes(data) {
-                                println!("Shutdown server on empty");
+                                ev_broker.write(BrokerEvent::ShutdownRequested);
+                                info!("🛑 Signal de Shutdown reçu du Broker ! Le serveur se fermera une fois vide.");
                             }
                         }
                         HandoffRequest::TAG => {
@@ -140,6 +141,7 @@ fn poll_broker(
                             if let Some(pkt) = TakeAuthority::try_from_bytes(data) {
                                 ev_broker.write(BrokerEvent::TakeAuthority {
                                     client_id: pkt.entity_id,
+                                    new_pos: Vec2::new(pkt.pos.x, pkt.pos.y),
                                 });
                             }
                         }

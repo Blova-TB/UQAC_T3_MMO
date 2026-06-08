@@ -3,25 +3,27 @@ use crate::events::{BrokerCommand, BrokerEvent};
 use crate::player::{Ghost, Player, PlayerBundle};
 use crate::states::ServerState;
 use bevy::prelude::*;
+use bevy::app::AppExit;
 use rand::Rng;
 use shared::custom_id::CustomId;
 use shared::game_protocol::{PlayerData, WorldSyncPayload};
 use shared::models::Vec2 as MathVec2;
-
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                handle_broker_events,
-                broadcast_sync_to_clients,
-                send_spatial_updates,
-            )
-                .chain()
-                .run_if(in_state(ServerState::Active)),
-        );
+        app.init_resource::<PendingShutdown>()
+            .add_systems(
+                Update,
+                (
+                    handle_broker_events,
+                    broadcast_sync_to_clients,
+                    send_spatial_updates,
+                    check_graceful_shutdown,
+                )
+                    .chain()
+                    .run_if(in_state(ServerState::Active)),
+            );
     }
 }
 
@@ -34,6 +36,9 @@ pub struct NetworkClient {
 pub struct SpatialSync {
     pub timer: Timer,
 }
+
+#[derive(Resource, Default)]
+pub struct PendingShutdown(pub bool);
 
 impl Default for SpatialSync {
     fn default() -> Self {
@@ -112,11 +117,15 @@ fn handle_broker_events(
                 });
             }
 
-            BrokerEvent::TakeAuthority { client_id } => {
+            BrokerEvent::TakeAuthority { client_id, new_pos } => {
                 let id_u32: u32 = (*client_id).into();
+
                 if let Some(&entity) = client_entities.0.get(&id_u32) {
-                    commands.entity(entity).remove::<Ghost>();
-                    info!("🎮 Autorité reprise sur le joueur {} (ghost retiré)", id_u32);
+                    commands.entity(entity)
+                        .remove::<Ghost>()
+                        .insert(Transform::from_translation(Vec3::new(new_pos.x, new_pos.y, 0.0)));
+
+                    info!("🎮 Autorité reprise sur le joueur {} (ghost retiré, position mise à jour)", id_u32);
                 }
             }
 
@@ -126,6 +135,10 @@ fn handle_broker_events(
                     commands.entity(entity).insert(Ghost);
                     info!("👻 Autorité lâchée sur le joueur {} (ghost ajouté)", id_u32);
                 }
+            }
+
+            BrokerEvent::ShutdownRequested => {
+                commands.insert_resource(PendingShutdown(true));
             }
         }
     }
@@ -165,5 +178,16 @@ fn send_spatial_updates(
                 pos: MathVec2::new(pos.x, pos.y),
             });
         }
+    }
+}
+
+fn check_graceful_shutdown(
+    pending: Res<PendingShutdown>,
+    query: Query<(), (With<Player>, Without<Ghost>)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if pending.0 && query.is_empty() {
+        info!("🏁 Serveur vide et en attente de fermeture. Extinction...");
+        exit.write(AppExit::Success);
     }
 }

@@ -152,6 +152,7 @@ define_packet! {
 define_packet!{
     TakeAuthority(0x16) {
         entity_id: CustomId,
+        pos: Vec2<f32>
     }
 }
 

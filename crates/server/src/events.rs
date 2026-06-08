@@ -23,10 +23,12 @@ pub enum BrokerEvent {
     },
     TakeAuthority {
         client_id: CustomId,
+        new_pos: Vec2,
     },
     DropAuthority {
         client_id: CustomId,
     },
+    ShutdownRequested,
 }
 
 #[derive(Message)]
