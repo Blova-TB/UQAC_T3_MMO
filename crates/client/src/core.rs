@@ -1,8 +1,9 @@
 ﻿use crate::states::AppState;
 use bevy::prelude::*;
-use shared::game_protocol::PlayerData;
-use shared::network::{GameConnection, GamePeer};
 use tokio::runtime::Runtime;
+
+use client_communication_protocol::client_models::*;
+use network_protocol::network::{GameConnection, GamePeer};
 
 pub struct CorePlugin;
 

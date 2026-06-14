@@ -1,15 +1,16 @@
 use ahash::AHashMap;
-use bytes::Bytes;
 use tracing::{error, info, warn};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 
+use network_protocol::network::protocols::QuicBackend;
+use network_protocol::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
+use internal_communication_protocol::internal_models::*;
+use custom_id::custom_id::CustomId;
+
 mod routing;
 use routing::OptimizedRoutingTable;
 
-use shared::models::*;
-use shared::network::protocols::QuicBackend;
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -244,7 +245,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 ServerHeartBeat::TAG => {
                     if let Some(s_conn) = &state.spatial_server_conn {
                         let unreliable_stream = GameStream::new(
-                            shared::constants::STREAM_PHYSICS,
+                            STREAM_PHYSICS,
                             GameStreamReliability::Unreliable
                         );
                         let _ = peer.send(s_conn, &unreliable_stream, data);
@@ -256,7 +257,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 PositionUpdate::TAG => {
                     if let Some(s_conn) = &state.spatial_server_conn {
                         let unreliable_stream = GameStream::new(
-                            shared::constants::STREAM_PHYSICS,
+                            STREAM_PHYSICS,
                             GameStreamReliability::Unreliable
                         );
                         let _ = peer.send(s_conn, &unreliable_stream, data);

@@ -1,11 +1,13 @@
 ﻿use crate::core::{SessionData, TargetServer, TokioRuntime};
 use crate::states::AppState;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, poll_once, IoTaskPool, Task};
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use shared::web_models::Claims;
 use std::time::Duration;
+
+use web_communication_protocol::web_models::Claims;
 
 pub struct AuthPlugin;
 

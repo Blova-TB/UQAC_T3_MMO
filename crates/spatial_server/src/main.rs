@@ -6,7 +6,6 @@ mod client_id;
 mod visualizer;
 
 use bytes::Bytes;
-use shared::models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 use std::time::{Duration, Instant};
 use std::{env, io, thread};
 use std::io::Write;
@@ -17,6 +16,8 @@ use spatial_service::SpatialService;
 use crate::shard_id::ShardId;
 use std::net::ToSocketAddrs;
 use std::sync::{mpsc, Arc, RwLock};
+
+use internal_communication_protocol::internal_models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 
 fn main() {
     println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");

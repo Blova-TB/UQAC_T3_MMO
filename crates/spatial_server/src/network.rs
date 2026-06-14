@@ -1,7 +1,8 @@
-﻿use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
-use shared::network::protocols::QuicBackend;
-use bytes::Bytes;
-use shared::models::*;
+﻿use bytes::Bytes;
+
+use network_protocol::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
+use network_protocol::network::protocols::QuicBackend;
+use internal_communication_protocol::internal_models::*;
 
 pub struct InfrastructureNetwork {
     orchestrator_peer: GamePeer,

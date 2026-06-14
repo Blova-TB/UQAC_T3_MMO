@@ -1,7 +1,8 @@
 ﻿use crate::events::BrokerEvent;
 use bevy::prelude::*;
-use shared::custom_id::CustomId;
 use std::collections::HashMap;
+
+use custom_id::custom_id::CustomId;
 
 pub struct CorePlugin;
 

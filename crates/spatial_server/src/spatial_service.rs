@@ -6,7 +6,8 @@ use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer, RefuseClient, ClientLeft, DespawnPlayerShard};
+
+use internal_communication_protocol::internal_models::*;
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,

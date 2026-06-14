@@ -1,10 +1,11 @@
 ﻿use crate::core::{ClientState, NetworkSnapshotEvent, SessionData, TargetServer};
 use crate::states::AppState;
 use bevy::prelude::*;
-use shared::game_protocol::GameMessage;
-use shared::models::{Broadcast, BrokerHandshakeClient, RefuseClient, ServerBinaryPacket};
-use shared::network::protocols::QuicBackend;
-use shared::network::{GameNetworkEvent, GamePeer, GameStreamReliability};
+
+use client_communication_protocol::client_models::GameMessage;
+use network_protocol::network::{GameNetworkEvent, GamePeer, GameStreamReliability};
+use network_protocol::network::protocols::QuicBackend;
+use internal_communication_protocol::internal_models::{Broadcast, BrokerHandshakeClient, RefuseClient, ServerBinaryPacket};
 
 pub struct NetworkPlugin;
 

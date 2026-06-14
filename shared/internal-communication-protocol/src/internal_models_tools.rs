@@ -1,5 +1,6 @@
 ﻿use bytes::{Buf, Bytes};
 use mathtools::Vec2;
+use custom_id::custom_id::CustomId;
 
 pub trait ServerBinaryPacket: Sized {
     const TAG: u8;
@@ -32,6 +33,23 @@ pub trait BinaryField : Sized {
     const MIN_SIZE: usize;
     fn try_read_from(data: &mut Bytes) -> Option<Self>;
     fn write_to(&self, buf: &mut Vec<u8>);
+}
+
+impl BinaryField for CustomId {
+    const MIN_SIZE: usize = 4;
+
+    #[inline]
+    fn try_read_from(data: &mut Bytes) -> Option<Self> {
+        if data.remaining() < Self::MIN_SIZE {
+            return None;
+        }
+        Some(Self::from(data.get_u32_le()))
+    }
+
+    #[inline]
+    fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.0.to_le_bytes());
+    }
 }
 
 impl BinaryField for u32 {

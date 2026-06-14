@@ -4,16 +4,15 @@ mod docker;
 use db::{Database, ServerInfo};
 use docker::DockerOrchestrator;
 use serde::Deserialize;
-use shared::network::protocols::QuicBackend;
-use shared::network::{GameNetworkEvent, GamePeer};
-use shared::constants::STREAM_HEARTBEAT;
-use shared::models::Status;
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::HashMap;
 use uuid::Uuid;
 use futures::StreamExt;
-use shared::models::{SpawnServer, AssignShard, ServerBinaryPacket};
+
+use network_protocol::network::protocols::QuicBackend;
+use network_protocol::network::{GameNetworkEvent, GamePeer};
+use internal_communication_protocol::internal_models::{STREAM_HEARTBEAT,Status,SpawnServer, AssignShard, ServerBinaryPacket};
 
 #[derive(Deserialize)]
 pub struct HeartbeatPayload {

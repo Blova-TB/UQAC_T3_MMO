@@ -1,13 +1,12 @@
 ﻿use crate::core::{ClientState, GameAssets, NetworkSnapshotEvent, SessionData};
 use crate::states::AppState;
 use bevy::prelude::*;
-use shared::game_protocol::{
-    CustomId, LogicalStream, PlayerInput, PlayerInputPayload, INPUT_ACTION, INPUT_DOWN, INPUT_LEFT,
-    INPUT_RIGHT, INPUT_UP,
-};
-use shared::models::{Publish, ServerBinaryPacket};
-use shared::network::{GameStream, GameStreamReliability};
 use std::collections::HashMap;
+
+use client_communication_protocol::client_models::*;
+use network_protocol::network::{GameStream, GameStreamReliability};
+use internal_communication_protocol::internal_models::{Publish, ServerBinaryPacket};
+use custom_id::custom_id::CustomId;
 
 pub struct GamePlugin;
 
