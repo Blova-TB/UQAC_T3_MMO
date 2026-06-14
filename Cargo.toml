@@ -13,8 +13,16 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-tokio = { version = "1.52.3", features = ["full"] }
-serde = "1.0.228"
+tokio = "1.52.3"
+bytes = "1.11.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+bitcode = "0.6.9"
+ahash = "0.8.12"
+rand = "0.10.1"
+mathtools = "0.1.0"
+bevy = { version = "0.18.1", default-features = false }
+
 
 [profile.dev]
 opt-level = 1

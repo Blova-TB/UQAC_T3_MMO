@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-
 web-communication-protocol = { path = "../../shared/web-communication-protocol" }
+
+tokio = { workspace = true }
+rand = { workspace = true }
 
 bcrypt = "0.19.1"
 rocket = { version = "0.5.1", features = ["json"] }
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "uuid"] }
-tokio = "1.52.3"
-rand = "0.8.6"
