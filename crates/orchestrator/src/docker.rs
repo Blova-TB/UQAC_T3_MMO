@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 pub struct DockerOrchestrator {
     docker: Docker,
-    orchestrator_ip: String, // <-- Remis en cache ici
+    orchestrator_ip: String,
     broker_ip: String,
 }
 

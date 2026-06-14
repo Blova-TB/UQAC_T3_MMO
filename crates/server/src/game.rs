@@ -5,10 +5,10 @@ use crate::states::ServerState;
 use bevy::prelude::*;
 use bevy::app::AppExit;
 use rand::Rng;
+use mathtools::Vec2 as MathVec2;
 
 use custom_id::custom_id::CustomId;
 use client_communication_protocol::client_models::{PlayerData, WorldSyncPayload};
-use internal_communication_protocol::internal_models::Vec2 as MathVec2;
 
 pub struct GamePlugin;
 

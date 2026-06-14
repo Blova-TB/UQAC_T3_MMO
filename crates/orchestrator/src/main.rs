@@ -11,8 +11,9 @@ use uuid::Uuid;
 use futures::StreamExt;
 
 use network_protocol::network::protocols::QuicBackend;
-use network_protocol::network::{GameNetworkEvent, GamePeer};
+use network_protocol::network::{GameNetworkEvent, GamePeer, GameStream, GameConnection};
 use internal_communication_protocol::internal_models::{STREAM_HEARTBEAT,Status,SpawnServer, AssignShard, ServerBinaryPacket};
+use custom_id::custom_id::CustomId;
 
 #[derive(Deserialize)]
 pub struct HeartbeatPayload {
@@ -58,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let docker_manager = Arc::new(DockerOrchestrator::new().await?);
     let mut autoscale_timer = tokio::time::interval(Duration::from_secs(1));
     let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
-    let mut server_streams: HashMap<Uuid, shared::network::GameStream> = HashMap::new();
+    let mut server_streams: HashMap<Uuid, GameStream> = HashMap::new();
 
     let mut conn = database.conn.clone();
     let _: () = redis::cmd("CONFIG").arg("SET").arg("notify-keyspace-events").arg("Ex").query_async(&mut conn).await?;
@@ -208,10 +209,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                                         // ✅ CORRECTION : On utilise le modèle partagé au lieu de forger les bytes à la main !
                                                         let assign_packet = AssignShard {
-                                                            shard_id: shared::custom_id::CustomId::from(shard_raw_id),
+                                                            shard_id: CustomId::from(shard_raw_id),
                                                         };
 
-                                                        let target_server_conn = shared::network::GameConnection { connection_id: conn_uuid };
+                                                        let target_server_conn = GameConnection { connection_id: conn_uuid };
 
                                                         // On envoie directement le packet sérialisé par ta macro
                                                         if orchestrator_peer.send(&target_server_conn, out_stream, assign_packet.to_bytes()).is_ok() {

@@ -29,8 +29,8 @@ pub async fn register(
             .execute(&**pool)
             .await;
 
-        match result {
-            Ok(_) => return Ok("Utilisateur créé"),
+        return match result {
+            Ok(_) => Ok("Utilisateur créé"),
 
             Err(sqlx::Error::Database(db_err)) => {
                 if db_err.is_unique_violation() {
@@ -45,9 +45,9 @@ pub async fn register(
                         }
                     }
                 }
-                return Err(db_err.message().to_string());
+                Err(db_err.message().to_string())
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
     Err("Impossible de générer un ID unique après plusieurs tentatives. Veuillez réessayer.".to_string())

@@ -2,6 +2,7 @@ use ahash::AHashMap;
 use tracing::{error, info, warn};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use mathtools::Vec2;
 
 use network_protocol::network::protocols::QuicBackend;
 use network_protocol::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};

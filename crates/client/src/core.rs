@@ -1,5 +1,4 @@
-﻿use crate::states::AppState;
-use bevy::prelude::*;
+﻿use bevy::prelude::*;
 use tokio::runtime::Runtime;
 
 use client_communication_protocol::client_models::*;

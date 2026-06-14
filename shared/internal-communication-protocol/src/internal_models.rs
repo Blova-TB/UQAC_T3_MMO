@@ -1,7 +1,7 @@
 pub use crate::internal_models_tools::{BinaryField, ServerBinaryPacket};
 use custom_id::custom_id::CustomId;
 use crate::{define_packet, define_packet_router};
-pub use mathtools::Vec2;
+use mathtools::Vec2;
 use serde::{Deserialize, Serialize};
 
 

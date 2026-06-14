@@ -15,7 +15,7 @@ use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use spatial_service::SpatialService;
 use crate::shard_id::ShardId;
 use std::net::ToSocketAddrs;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{Arc, RwLock};
 
 use internal_communication_protocol::internal_models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 
@@ -109,7 +109,9 @@ fn main() {
                         handle_broker_data(data, &mut spatial_service)
                     }
                     InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
-                        handle_orchestrator_data(data, &mut spatial_service)
+                        // handle_orchestrator_data(data, &mut spatial_service) aucune donnée attendue de l'Orchestrateur
+                        println!("Erreur : Message reçu de l'Orchestrateur : {:?}", data);
+                        None
                     }
                     InfrastructureEvent::Disconnected { source } => {
                         eprintln!("Connexion perdue avec {:?}", source);
@@ -166,20 +168,20 @@ fn main() {
     }
 }
 
-fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
-    let cmd : Option<Vec<(PeerType,Bytes)>> =
-        match CustomServerPacket::try_from_bytes(raw_bytes) {
-            None => {
-                eprintln!("Paquet binaire invalide ou Tag inconnu reçu de l'Orchestrateur.");
-                None
-            }
-            _ => {
-                eprintln!("Paquet reçu de l'Orchestrateur mais pas encore géré dans le SpatialService.");
-                None
-            }
-        };
-    cmd
-}
+// fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
+//     let cmd : Option<Vec<(PeerType,Bytes)>> =
+//         match CustomServerPacket::try_from_bytes(raw_bytes) {
+//             None => {
+//                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu de l'Orchestrateur.");
+//                 None
+//             }
+//             _ => {
+//                 eprintln!("Paquet reçu de l'Orchestrateur mais pas encore géré dans le SpatialService.");
+//                 None
+//             }
+//         };
+//     cmd
+// }
 
 fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =
