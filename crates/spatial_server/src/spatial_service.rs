@@ -268,10 +268,13 @@ impl SpatialService {
                 // si le client attendait pour cross dans cette shard
                 self.client_waiting_for_crossing.remove(&client_id);
 
+                let &new_pos= self.quad_tree.get_shard_by_id(shard_id)?.players.get(&client_id)?;
+
                 let handoff_complete = HandoffComplete {
                     new_shard_id: shard_id.into(),
                     entity_id: client_id.into(),
                     old_shard_id: old_shard_id.into(),
+                    pos : new_pos,
                 };
 
                 return Some(vec![(PeerType::Broker, handoff_complete.to_bytes())]);
@@ -311,6 +314,7 @@ impl SpatialService {
         };
 
         current_node.server_occupation = Option::from(update_data.occupancy);
+        println!("Server occupation : {:?}", current_node.server_occupation);
 
         if update_data.occupancy > self.occupation_to_subdivide {
             if current_node.depth >= current_node.max_depth {
@@ -402,6 +406,7 @@ impl SpatialService {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
         let shard_id: ShardId = ShardId::try_from(update_data.shard_id).ok()?;
+        println!("Shard id: {:?} spawned", shard_id);
 
         if shard_id == ShardId::ROOT && !self.is_root_initialized {
             self.is_root_initialized = true;
@@ -486,6 +491,7 @@ impl SpatialService {
                              near_shards: Vec<ShardId>,
                              packets: &mut Vec<(PeerType, Bytes)>| {
             for near_shard_id in near_shards {
+                println!("Fast Handoff entity:{:?} shard_id:{:?}", entity_id, near_shard_id);
                 packets.push(fast_handoff_req(entity_id, near_shard_id));
             }
         };
@@ -551,7 +557,7 @@ impl SpatialService {
             shard_id: shard_id.into(),
         };
 
-        outgoing_packets.push((PeerType::Orchestrator, shutdown_packet.to_bytes()));
+        outgoing_packets.push((PeerType::Broker, shutdown_packet.to_bytes()));
 
         Some(outgoing_packets)
     }
@@ -603,7 +609,7 @@ impl SpatialService {
             let shutdown_packet = ShutdownServerOnEmpty {
                 shard_id: (*old_shard_id).into(),
             };
-            outgoing_packets.push((PeerType::Orchestrator, shutdown_packet.to_bytes()));
+            outgoing_packets.push((PeerType::Broker, shutdown_packet.to_bytes()));
         }
 
         Some(outgoing_packets)
@@ -635,6 +641,7 @@ impl SpatialService {
                 new_shard_id: new_shard_id.into(),
                 old_shard_id: old_shard_id.into(),
                 entity_id: client_id.into(),
+                pos: new_pos,
             };
 
             outgoing_packets.push((PeerType::Broker, handoff_complete.to_bytes()));

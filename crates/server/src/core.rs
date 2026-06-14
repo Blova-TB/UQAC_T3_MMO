@@ -8,7 +8,8 @@ pub struct CorePlugin;
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClientEntities>()
-            .add_message::<BrokerEvent>();
+            .add_message::<BrokerEvent>()
+            .add_message::<crate::events::BrokerCommand>();
     }
 }
 

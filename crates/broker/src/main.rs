@@ -293,13 +293,15 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 HandoffRequest::TAG => {
+                    println!("FastHandOff received");
                     let Some(pkt) = HandoffRequest::try_from_bytes(data.clone()) else { return; };
 
                     let shard_id: u32 = pkt.shard_id.into();
                     let entity_id: u32 = pkt.entity_id.into();
+                    println!("shard_id : {:?}, entity_id : {:?}", shard_id, entity_id);
 
                     // on abonne le game server au input et a la position du client
-                    state.routing_table.subscribe(entity_id, shard_id);
+                    state.routing_table.subscribe(shard_id, entity_id);
 
                     // on forward la requete de handoff au shard concerné
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
@@ -322,7 +324,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     let entity_id: u32 = pkt.entity_id.into();
 
                     // on desabonne le game server du client (position et input)
-                    state.routing_table.unsubscribe(entity_id, shard_id);
+                    state.routing_table.unsubscribe(shard_id, entity_id);
 
                     // on forward la requete de drop au shard concerné
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
@@ -335,13 +337,17 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
 
                     let new_shard_id: u32 = pkt.new_shard_id.into();
                     let old_shard_id: u32 = pkt.old_shard_id.into();
+                    let new_pos: Vec2<f32> = pkt.pos.into();
 
                     if let Some(conn) = state.shard_conns.get(&new_shard_id) {
                         let take_pkt = TakeAuthority {
                             entity_id: pkt.entity_id,
+                            pos: new_pos,
                         }.to_bytes();
                         let _ = peer.send(conn, state.shard_streams.get(&new_shard_id).unwrap(), take_pkt);
                     }
+
+                    state.routing_table.subscribe(pkt.entity_id.into(), new_shard_id);
 
                     if let Some(conn) = state.shard_conns.get(&old_shard_id) {
                         let drop_pkt = DropAuthority {
@@ -349,6 +355,17 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         }.to_bytes();
                         let _ = peer.send(conn, state.shard_streams.get(&old_shard_id).unwrap(), drop_pkt);
                     }
+
+                    state.routing_table.unsubscribe(pkt.entity_id.into(), old_shard_id);
+                }
+
+                ShutdownServerOnEmpty::TAG => {
+                    let Some(pkt) = ShutdownServerOnEmpty::try_from_bytes(data.clone()) else { return; };
+                    let shard_id: u32 = pkt.shard_id.into();
+                    if let (Some(s_conn), Some(s_stream)) = (state.shard_conns.get(&shard_id), state.shard_streams.get(&shard_id)) {
+                        let _ = peer.send(s_conn, s_stream, data);
+                    }
+                    println!("Shutdown server on empty")
                 }
                 _ => warn!("Tag non reconnu : 0x{:02X}", tag),
             }

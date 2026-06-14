@@ -145,12 +145,14 @@ define_packet! {
         new_shard_id: CustomId,
         old_shard_id: CustomId,
         entity_id: CustomId,
+        pos: Vec2<f32>
     }
 }
 
 define_packet!{
     TakeAuthority(0x16) {
         entity_id: CustomId,
+        pos: Vec2<f32>
     }
 }
 

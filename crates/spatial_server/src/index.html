@@ -57,9 +57,25 @@
             const x = shard.rect.min_x * scaleX;
             const y = canvas.height - (shard.rect.max_y * scaleY);
 
-            ctx.strokeStyle = '#0f3460';
-            ctx.lineWidth = 2;
+            // Limite réelle du shard
+            ctx.strokeStyle = '#4fc3f7';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([]);
             ctx.strokeRect(x, y, w, h);
+
+            // Vraie marge du shard, exprimée en unités monde depuis le backend
+            const marginX = shard.margin * scaleX;
+            const marginY = shard.margin * scaleY;
+            ctx.strokeStyle = 'rgba(76, 175, 80, 0.55)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.strokeRect(
+                x - marginX,
+                y - marginY,
+                w + (marginX * 2),
+                h + (marginY * 2)
+            );
+            ctx.setLineDash([]);
 
             ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
             ctx.font = '10px Arial';

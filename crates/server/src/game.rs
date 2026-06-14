@@ -1,29 +1,29 @@
-﻿use crate::broker_plugin::BrokerConnection;
-use crate::core::ClientEntities;
-use crate::events::BrokerEvent;
-use crate::player::{Player, PlayerBundle};
+﻿use crate::core::ClientEntities;
+use crate::events::{BrokerCommand, BrokerEvent};
+use crate::player::{Ghost, Player, PlayerBundle};
 use crate::states::ServerState;
 use bevy::prelude::*;
+use bevy::app::AppExit;
 use rand::Rng;
 use shared::custom_id::CustomId;
-use shared::game_protocol::{LogicalStream, PlayerData, WorldSyncPayload};
-use shared::models::{PositionUpdate, Publish, ServerBinaryPacket, Vec2 as MathVec2};
-use shared::network::{GameStream, GameStreamReliability};
-
+use shared::game_protocol::{PlayerData, WorldSyncPayload};
+use shared::models::Vec2 as MathVec2;
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                handle_broker_events,
-                broadcast_sync_to_clients,
-                send_spatial_updates,
-            )
-                .chain()
-                .run_if(in_state(ServerState::Active)),
-        );
+        app.init_resource::<PendingShutdown>()
+            .add_systems(
+                Update,
+                (
+                    handle_broker_events,
+                    broadcast_sync_to_clients,
+                    send_spatial_updates,
+                    check_graceful_shutdown,
+                )
+                    .chain()
+                    .run_if(in_state(ServerState::Active)),
+            );
     }
 }
 
@@ -36,6 +36,9 @@ pub struct NetworkClient {
 pub struct SpatialSync {
     pub timer: Timer,
 }
+
+#[derive(Resource, Default)]
+pub struct PendingShutdown(pub bool);
 
 impl Default for SpatialSync {
     fn default() -> Self {
@@ -55,8 +58,9 @@ pub struct PlayerInputState {
 fn handle_broker_events(
     mut commands: Commands,
     mut ev_broker: MessageReader<BrokerEvent>,
+    mut ev_commands: MessageWriter<BrokerCommand>,
     mut client_entities: ResMut<ClientEntities>,
-    mut q_inputs: Query<&mut PlayerInputState>,
+    mut q_inputs: Query<&mut PlayerInputState, Without<Ghost>>,
 ) {
     for ev in ev_broker.read() {
         match ev {
@@ -91,15 +95,67 @@ fn handle_broker_events(
                     }
                 }
             }
+
+            BrokerEvent::SpawnGhostPlayer { shard_id, client_id } => {
+                let id_u32: u32 = (*client_id).into();
+                let entity = commands
+                    .spawn((
+                        PlayerBundle::new(Vec2::ZERO, 100, 300.0, 15.0),
+                        Ghost,
+                        NetworkClient { id: *client_id },
+                        SpatialSync::default(),
+                        PlayerInputState::default(),
+                    ))
+                    .id();
+
+                client_entities.0.insert(id_u32, entity);
+
+                info!("👻 Joueur {} est passé en ghost (entité {:?}) !", id_u32, entity);
+                ev_commands.write(BrokerCommand::SendHandoffAccept {
+                    shard_id: *shard_id,
+                    entity_id: *client_id,
+                });
+            }
+
+            BrokerEvent::TakeAuthority { client_id, new_pos } => {
+                let id_u32: u32 = (*client_id).into();
+
+                if let Some(&entity) = client_entities.0.get(&id_u32) {
+                    commands.entity(entity)
+                        .remove::<Ghost>()
+                        .insert(Transform::from_translation(Vec3::new(new_pos.x, new_pos.y, 0.0)));
+
+                    info!("🎮 Autorité reprise sur le joueur {} (ghost retiré, position mise à jour)", id_u32);
+                }
+            }
+
+            BrokerEvent::DropAuthority { client_id } => {
+                let id_u32: u32 = (*client_id).into();
+                if let Some(&entity) = client_entities.0.get(&id_u32) {
+                    commands.entity(entity).insert(Ghost);
+                    info!("👻 Autorité lâchée sur le joueur {} (ghost ajouté)", id_u32);
+                }
+            }
+
+            BrokerEvent::ShutdownRequested => {
+                commands.insert_resource(PendingShutdown(true));
+            }
+
+            BrokerEvent::HandoffDrop{ client_id } => {
+                let id_u32: u32 = (*client_id).into();
+                if let Some(&entity) = client_entities.0.get(&id_u32) {
+                    commands.entity(entity).despawn();
+                    info!("🪓 Entité {} tuée", id_u32);
+                }
+            }
         }
     }
 }
 
 fn broadcast_sync_to_clients(
-    broker: Res<BrokerConnection>,
-    query: Query<(&Transform, &NetworkClient), With<Player>>,
+    query: Query<(&Transform, &NetworkClient), (With<Player>, Without<Ghost>)>,
+    mut ev_commands: MessageWriter<BrokerCommand>,
 ) {
-    let Some(conn) = &broker.connection else { return };
     if query.is_empty() { return; }
 
     let entities_data: Vec<PlayerData> = query
@@ -114,32 +170,32 @@ fn broadcast_sync_to_clients(
         .collect();
 
     let sync_payload = WorldSyncPayload { entities: entities_data };
-    let publish_packet = Publish {
-        topic_id: CustomId::from(broker.topic),
-        payload: bitcode::encode(&sync_payload),
-    };
-
-    let stream = GameStream::new(LogicalStream::WorldSync as u16, GameStreamReliability::Unreliable);
-    let _ = broker.peer.send(conn, &stream, publish_packet.to_bytes());
+    ev_commands.write(BrokerCommand::SendWorldSync(sync_payload));
 }
 
 fn send_spatial_updates(
     time: Res<Time>,
-    broker: Res<BrokerConnection>,
-    mut query: Query<(&mut SpatialSync, &NetworkClient, &Transform), With<Player>>,
+    mut query: Query<(&mut SpatialSync, &NetworkClient, &Transform), (With<Player>, Without<Ghost>)>,
+    mut ev_commands: MessageWriter<BrokerCommand>,
 ) {
-    let Some(conn) = &broker.connection else { return };
-
     for (mut sync, client, transform) in query.iter_mut() {
         if sync.timer.tick(time.delta()).just_finished() {
             let pos = transform.translation.truncate();
-            let packet = PositionUpdate {
+            ev_commands.write(BrokerCommand::SendPositionUpdate {
                 client_id: client.id,
                 pos: MathVec2::new(pos.x, pos.y),
-            };
-
-            let stream = GameStream::new(0, GameStreamReliability::Unreliable);
-            let _ = broker.peer.send(conn, &stream, packet.to_bytes());
+            });
         }
+    }
+}
+
+fn check_graceful_shutdown(
+    pending: Res<PendingShutdown>,
+    query: Query<(), (With<Player>, Without<Ghost>)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if pending.0 && query.is_empty() {
+        info!("🏁 Serveur vide et en attente de fermeture. Extinction...");
+        exit.write(AppExit::Success);
     }
 }
