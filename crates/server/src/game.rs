@@ -4,7 +4,7 @@ use crate::player::{Ghost, Player, PlayerBundle};
 use crate::states::ServerState;
 use bevy::prelude::*;
 use bevy::app::AppExit;
-use rand::Rng;
+use rand::RngExt;
 use mathtools::Vec2 as MathVec2;
 
 use custom_id::custom_id::CustomId;

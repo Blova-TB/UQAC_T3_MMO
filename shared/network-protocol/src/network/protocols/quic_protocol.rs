@@ -11,9 +11,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::network::{BackendCommand, GameNetworkEvent, GameSocketBackend, GameSocketError, GameStream, GameStreamReliability};
 use rustls::client::{ServerCertVerified, ServerCertVerifier};
 use tracing::error;
-use tracing::log::{debug, log};
 use crate::network::GameNetworkEvent::StreamCreated;
-use crate::network::GameStreamReliability::{Reliable, Unreliable};
+use crate::network::GameStreamReliability::{Reliable};
 
 struct SkipServerVerification;
 
