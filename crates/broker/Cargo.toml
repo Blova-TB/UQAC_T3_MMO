@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ahash = "0.8"
-bytes = "1.5"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-shared = { path = "../shared" }
-jsonwebtoken = { version = "10.4", features = ["rust_crypto"] }
-serde = { version = "1.0.228", features = ["derive"] }
-mathtools = "0.1"
+internal-communication-protocol = { path = "../../shared/internal-communication-protocol" }
+network-protocol = { path = "../../shared/network-protocol" }
+custom-id = { path = "../../shared/custom-id" }
+
+ahash = { workspace = true }
+serde = { workspace = true }
+mathtools = { workspace = true }
+
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }

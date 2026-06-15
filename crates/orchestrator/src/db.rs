@@ -1,8 +1,9 @@
 ﻿use redis::aio::MultiplexedConnection;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use shared::models::Status;
 use anyhow::{Result};
+
+use internal_communication_protocol::internal_models::Status;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerInfo {

@@ -5,11 +5,12 @@ use crate::states::ServerState;
 use bevy::prelude::*;
 use bytes::Bytes;
 use serde::Serialize;
-use shared::constants::STREAM_HEARTBEAT;
-use shared::models::{AssignShard, ServerBinaryPacket, Status};
-use shared::network::protocols::QuicBackend;
-use shared::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use std::net::SocketAddr;
+
+use internal_communication_protocol::internal_models::STREAM_HEARTBEAT;
+use internal_communication_protocol::internal_models::{AssignShard, ServerBinaryPacket, Status};
+use network_protocol::network::protocols::QuicBackend;
+use network_protocol::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 
 pub struct OrchestratorPlugin;
 

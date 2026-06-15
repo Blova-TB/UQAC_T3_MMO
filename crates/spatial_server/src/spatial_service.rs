@@ -6,13 +6,14 @@ use crate::shard_id::{Quadrant, ShardId};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
-use shared::models::{HandoffAccept, HandoffComplete, HandoffDrop, HandoffRequest, PlayerJoinUpdate, PositionUpdate, ServerBinaryPacket, ServerHeartBeat, ServerSpawned, ShutdownServerOnEmpty, SpawnPlayerShard, SpawnServer, RefuseClient, ClientLeft, DespawnPlayerShard};
+
+use internal_communication_protocol::internal_models::*;
 
 pub struct SpatialService {
     pub quad_tree: QuadTree,
 
     /// client_id → (shard_id, last_shard_change_time) (temps pour l'Hystérésis)
-    pub client_to_shards: AHashMap<ClientId, (ShardId, std::time::Instant)>,
+    pub client_to_shards: AHashMap<ClientId, (ShardId, Instant)>,
 
     /// shard_id → client_id: is replicate in ghost on this serv ? (if exist alors le shard est pret à recevoir l'autorité)
     pub ghost_client: AHashMap<ShardId, Vec<ClientId>>,
@@ -506,7 +507,7 @@ impl SpatialService {
                 .insert(player_id, (shard_id,player_new_shard_id));
 
             self.client_to_shards
-                .insert(player_id, (player_new_shard_id, std::time::Instant::now()));
+                .insert(player_id, (player_new_shard_id, Instant::now()));
 
             // on recalcule pour tous les player de la shard si ils sont dans des marge entre les 4 nouvelles shard
             // pas besoin de se retirer soit meme (shard) car il le faut aussi !
@@ -590,7 +591,7 @@ impl SpatialService {
         for (player_id,old_shard_id) in players.0 {
             self.client_waiting_for_crossing.insert(player_id, (old_shard_id,shard_id));
             self.client_to_shards
-                .insert(player_id, (shard_id, std::time::Instant::now()));
+                .insert(player_id, (shard_id, Instant::now()));
             outgoing_packets.push(fast_handoff_req(player_id, shard_id));
         }
 
@@ -662,7 +663,7 @@ impl SpatialService {
         };
 
         self.quad_tree.remove_player(client_id, old_shard_id);
-        self.client_to_shards.insert(client_id, (new_shard_id, std::time::Instant::now()));
+        self.client_to_shards.insert(client_id, (new_shard_id, Instant::now()));
 
         outgoing_packets
     }

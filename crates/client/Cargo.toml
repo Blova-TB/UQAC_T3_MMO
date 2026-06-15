@@ -4,11 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.18.1"
-shared = { path = "../shared" }
-reqwest = { version = "0.13", features = ["json"] }
-tokio = "1.52.3"
-serde_json = "1.0.149"
+client-communication-protocol = { path = "../../shared/client-communication-protocol" }
+internal-communication-protocol = { path = "../../shared/internal-communication-protocol" }
+network-protocol = { path = "../../shared/network-protocol" }
+web-communication-protocol = { path = "../../shared/web-communication-protocol" }
+custom-id = { path = "../../shared/custom-id" }
+
+bevy = { workspace = true, features = ["default"] }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+bitcode = { workspace = true }
+
+reqwest = { version = "0.13.4", features = ["json"] }
 bevy_egui = "0.39.1"
 base64 = "0.22.1"
-bitcode = "0.6.9"

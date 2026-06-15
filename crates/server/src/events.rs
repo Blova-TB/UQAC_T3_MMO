@@ -1,8 +1,8 @@
 ﻿use bevy::prelude::*;
-use shared::custom_id::CustomId;
-use shared::game_protocol::PlayerInputPayload;
-use shared::game_protocol::WorldSyncPayload;
-use shared::models::Vec2 as MathVec2;
+use mathtools::Vec2 as MathVec2;
+
+use custom_id::custom_id::CustomId;
+use client_communication_protocol::client_models::{PlayerInputPayload,WorldSyncPayload};
 
 #[derive(Message)]
 pub enum BrokerEvent {

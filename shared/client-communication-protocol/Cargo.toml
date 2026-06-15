@@ -1,0 +1,8 @@
+[package]
+name = "client-communication-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+custom-id = { path = "../custom-id" }
+bitcode = "0.6.9"

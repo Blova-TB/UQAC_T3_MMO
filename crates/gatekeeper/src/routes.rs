@@ -1,11 +1,12 @@
 use bcrypt::{DEFAULT_COST, hash, verify};
-use rand::Rng;
+use rand::RngExt;
 use rocket::State;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use sqlx::{Pool, Postgres, Row, types::Uuid};
-use shared::web_models::{AuthRequest, AuthenticatedUser, BasicCredentials, ServerResponse};
-use shared::web_models_tools::create_jwt;
+
+use web_communication_protocol::web_models::{AuthRequest, AuthenticatedUser, BasicCredentials, ServerResponse};
+use web_communication_protocol::web_models_tools::create_jwt;
 
 #[post("/register", data = "<user_data>")]
 pub async fn register(
@@ -17,7 +18,7 @@ pub async fn register(
     const MAX_RETRIES: u32 = 5;
 
     for _ in 0..MAX_RETRIES {
-        let random_client_id: i32 = rand::thread_rng().gen_range(1..=0x0FFF_FFFF);
+        let random_client_id: i32 = rand::rng().random_range(1..=0x0FFF_FFFF);
 
         let result = sqlx::query("INSERT INTO users (username, password_hash, custom_id, pos_x, pos_y) VALUES ($1, $2, $3, $4, $5)")
             .bind(&user_data.username)
@@ -28,8 +29,8 @@ pub async fn register(
             .execute(&**pool)
             .await;
 
-        match result {
-            Ok(_) => return Ok("Utilisateur créé"),
+        return match result {
+            Ok(_) => Ok("Utilisateur créé"),
 
             Err(sqlx::Error::Database(db_err)) => {
                 if db_err.is_unique_violation() {
@@ -44,9 +45,9 @@ pub async fn register(
                         }
                     }
                 }
-                return Err(db_err.message().to_string());
+                Err(db_err.message().to_string())
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
     Err("Impossible de générer un ID unique après plusieurs tentatives. Veuillez réessayer.".to_string())

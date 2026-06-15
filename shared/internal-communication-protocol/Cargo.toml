@@ -1,0 +1,10 @@
+[package]
+name = "internal-communication-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+custom-id = { path = "../custom-id" }
+bytes = "1.11.1"
+serde = { version = "1.0.228", features = ["derive"] }
+mathtools = "0.1"

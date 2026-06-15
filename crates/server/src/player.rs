@@ -1,6 +1,7 @@
 ﻿use avian2d::prelude::*;
 use bevy::prelude::*;
-use shared::game_protocol::{INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP};
+
+use client_communication_protocol::client_models::{INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP};
 
 use crate::game::PlayerInputState;
 

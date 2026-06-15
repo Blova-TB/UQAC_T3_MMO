@@ -1,9 +1,6 @@
-﻿use bytes::{Buf, Bytes};
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use bitcode::{Decode, Encode};
 use std::fmt;
-
-use crate::models_trait_and_macro::BinaryField;
 
 #[derive(Serialize, Deserialize, Encode, Decode, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -30,7 +27,7 @@ impl TryFrom<u8> for IdType {
 }
 
 #[derive(Serialize, Deserialize, Encode, Decode, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CustomId(u32);
+pub struct CustomId(pub u32);
 
 impl CustomId {
     pub const ID_MASK: u32 = 0x0FFF_FFFF;
@@ -76,23 +73,6 @@ impl From<CustomId> for u32 {
     #[inline]
     fn from(custom_id: CustomId) -> Self {
         custom_id.0
-    }
-}
-
-impl BinaryField for CustomId {
-    const MIN_SIZE: usize = 4;
-
-    #[inline]
-    fn try_read_from(data: &mut Bytes) -> Option<Self> {
-        if data.remaining() < Self::MIN_SIZE {
-            return None;
-        }
-        Some(Self::from(data.get_u32_le()))
-    }
-
-    #[inline]
-    fn write_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0.to_le_bytes());
     }
 }
 

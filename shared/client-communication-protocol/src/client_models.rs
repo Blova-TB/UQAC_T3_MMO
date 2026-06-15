@@ -1,4 +1,4 @@
-﻿pub use crate::custom_id::CustomId;
+﻿use custom_id::custom_id::CustomId;
 use bitcode::{Encode, Decode};
 
 // --- Constantes d'Input (Bitmask) ---

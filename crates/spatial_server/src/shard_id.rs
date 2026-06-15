@@ -1,7 +1,8 @@
 ﻿use std::fmt;
 use mathtools::Vec2;
 use crate::quad_tree::Rect;
-use shared::custom_id::{CustomId, IdType};
+
+use custom_id::custom_id::{CustomId, IdType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Quadrant {
@@ -98,7 +99,7 @@ impl ShardId {
 
         let mut parent_val = self.0.value() & Self::QUADRANT_MASK;
         parent_val &= !(0b11 << (Self::DEPTH_SHIFT - (2 * depth)));
-        parent_val &= !(Self::DEPTH_MASK);
+        parent_val &= !Self::DEPTH_MASK;
         parent_val |= ((depth - 1) as u32) << Self::DEPTH_SHIFT;
 
         Some(Self(CustomId::new_unchecked(IdType::Server, parent_val)))

@@ -1,5 +1,6 @@
 ﻿use std::fmt;
-use shared::custom_id::{CustomId, IdType};
+
+use custom_id::custom_id::{CustomId, IdType};
 
 /// ClientId encapsule un CustomId garanti d'être de type IdType::Client
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
