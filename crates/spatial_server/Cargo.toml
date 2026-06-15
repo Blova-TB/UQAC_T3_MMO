@@ -8,6 +8,7 @@ edition = "2024"
 internal-communication-protocol = { path = "../../shared/internal-communication-protocol" }
 network-protocol = { path = "../../shared/network-protocol" }
 custom-id = { path = "../../shared/custom-id" }
+mmo-math-tools = { path = "../../shared/mmo-math-tools" }
 
 mathtools = { workspace = true }
 bytes = { workspace = true }

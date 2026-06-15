@@ -9,7 +9,7 @@ members = [
     "shared/network-protocol",
     "shared/internal-communication-protocol",
     "shared/client-communication-protocol",
-    "shared/web-communication-protocol", "shared/custom-id"]
+    "shared/web-communication-protocol", "shared/custom-id", "shared/mmo-math-tools"]
 resolver = "2"
 
 [workspace.dependencies]

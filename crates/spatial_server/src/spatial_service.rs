@@ -1,12 +1,13 @@
 ﻿use std::time::Instant;
-use crate::client_id::ClientId;
 use crate::network::PeerType;
-use crate::quad_tree::{QuadTree, Rect};
-use crate::shard_id::{Quadrant, ShardId};
+use crate::quad_tree::{QuadTree};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
 
+use custom_id::client_id::ClientId;
+use custom_id::shard_id::{Quadrant, ShardId};
+use mmo_math_tools::rect::Rect;
 use internal_communication_protocol::internal_models::*;
 
 pub struct SpatialService {
