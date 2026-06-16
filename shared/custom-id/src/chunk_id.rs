@@ -44,6 +44,22 @@ impl ChunkId {
         let y_adj = val & Self::COORD_MASK;
         (y_adj as i32) - Self::OFFSET
     }
+    
+    #[inline]
+    pub fn to_position(&self) -> Vec2<f32> {
+        Vec2 {
+            x: self.x() as f32 * Self::CHUNK_SIZE,
+            y: self.y() as f32 * Self::CHUNK_SIZE,
+        }
+    }
+    
+    #[inline]
+    pub fn to_chunk_coords(&self) -> Vec2<i32> {
+        Vec2 {
+            x: self.x(),
+            y: self.y(),
+        }
+    }
 
     pub fn get_surrounding_chunks(&self) -> [ChunkId; 9] {
         let cx = self.x();

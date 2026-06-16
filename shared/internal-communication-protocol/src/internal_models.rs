@@ -42,6 +42,8 @@ define_packet_router! {
         SpawnPlayerShard(SpawnPlayerShard),
         RefuseClient(RefuseClient),
         ClientLeft(ClientLeft),
+        AoiPosUpdate(AoiPosUpdate),
+        AoiModeChange(AoiModeChange),
     }
 }
 
@@ -244,5 +246,23 @@ define_packet! {
 define_packet!{
     RefuseClient(0x42) {
         client_id: CustomId,
+    }
+}
+
+
+// ========================================== 0x50 : AOI SERVICE ==========================================
+
+define_packet!{
+    AoiPosUpdate(0x50) {
+        client_id: CustomId,
+        chunk_id: CustomId,
+    }
+}
+
+define_packet!{
+    AoiModeChange(0x51) {
+        client_id: CustomId,
+        chunk_id: CustomId,
+        new_mode: u8,
     }
 }
