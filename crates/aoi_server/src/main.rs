@@ -54,7 +54,7 @@ fn main() {
                     let _ = handle_broker_data(data, &mut aoi_service);
                 },
                 InfrastructureEvent::Disconnected {} => {
-                    println!("Déconnecté du broker !");
+                    println!("😨😨😨Déconnecté du broker !");
                 }
             }
         }

@@ -98,9 +98,15 @@ define_packet! {
 
 define_packet! {
     BrokerHandshakeSpatial(0x08) {
-        magic: u32,
+        magic: u16,
     }
 }
+define_packet!{
+    BrokerHandshakeAoi(0x09) {
+        magic: u16,
+    }
+}
+
 
 // ========================================== 0x10 : SPATIAL ==========================================
 

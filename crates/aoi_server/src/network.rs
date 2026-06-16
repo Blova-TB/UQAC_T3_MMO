@@ -51,7 +51,7 @@ impl InfrastructureNetwork {
             GameNetworkEvent::StreamCreated(conn, stream) => {
                 if stream.is_reliable() {
                     self.broker_reliable_stream = Some(stream.clone());
-                    let handshake = BrokerHandshakeSpatial { magic: 42 };
+                    let handshake = BrokerHandshakeAoi { magic: 42 };
                     let _ = self.broker_peer.send(&conn, &stream, handshake.to_bytes());
                     println!("🧠 [Aoi] Handshake typé envoyé au Broker !");
                 }
