@@ -13,7 +13,7 @@ mod network;
 mod aoi_service;
 
 fn main() {
-    println!("Hello, world! I'm the aoi-service.");
+    println!("Hello, world! I'm the aoi_server.");
 
     let mut aoi_service = aoi_service::AoiService::new();
 
@@ -32,7 +32,7 @@ fn main() {
     let resolved_broker_port = broker_resolved.port();
 
     println!(
-        "Démarrage aoi-service. Cibles résolues -> Broker: {}:{}",
+        "Démarrage aoi_server. Cibles résolues -> Broker: {}:{}",
         resolved_broker_ip, resolved_broker_port
     );
 

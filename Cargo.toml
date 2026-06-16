@@ -12,7 +12,9 @@ members = [
     "shared/web-communication-protocol",
     "shared/custom-id",
     "shared/mmo-math-tools",
-    "crates/aoi-service", "shared/aoi-model"]
+    "crates/aoi_server",
+    "shared/aoi-model",
+]
 resolver = "2"
 
 [workspace.dependencies]

@@ -141,6 +141,20 @@ services:
     networks:
       - game-network
 
+  aoi-server:
+    build:
+      context: ..
+      dockerfile: docker/aoi_server.Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - BROKER_ADDR=${BROKER_ADDR:-broker}
+      - BROKER_PORT=${BROKER_PORT:-5000}
+
+      - RUST_LOG=${RUST_LOG:-info}
+    networks:
+      - game-network
+
 networks:
   game-network:
     driver: bridge
