@@ -2,6 +2,7 @@
 use mathtools::Vec2 as MathVec2;
 
 use custom_id::custom_id::CustomId;
+use aoi_model::aoi_model::AoiMode;
 use client_communication_protocol::client_models::{PlayerInputPayload,WorldSyncPayload};
 
 #[derive(Message)]
@@ -44,6 +45,15 @@ pub enum BrokerCommand {
     SendHandoffAccept {
         shard_id: CustomId,
         entity_id: CustomId,
+    },
+    SendAoiModeChange {
+        client_id: CustomId,
+        pos: Vec2,
+        mode: AoiMode,
+    },
+    AoiPosUpdate{
+        client_id: CustomId,
+        pos: Vec2,
     },
 }
 

@@ -8,6 +8,7 @@ use mathtools::Vec2 as MathVec2;
 
 use custom_id::custom_id::CustomId;
 use client_communication_protocol::client_models::{GameMessage, LogicalStream};
+use custom_id::chunk_id::ChunkId;
 use internal_communication_protocol::internal_models::*;
 use network_protocol::network::{GameConnection, GameNetworkEvent, GamePeer, GameStream, GameStreamReliability};
 use network_protocol::network::protocols::QuicBackend;
@@ -221,6 +222,38 @@ fn send_broker_commands(
                 };
 
                 let _ = broker.peer.send(conn, stream, accept.to_bytes());
+            }
+            BrokerCommand::SendAoiModeChange { client_id, pos, mode } => {
+                let Some(stream) = broker.reliable_stream.as_ref() else {
+                    warn!("Impossible d'envoyer AoiModeChange: stream fiable non initialisé");
+                    continue;
+                };
+                
+                let packet = AoiModeChange {
+                    client_id: *client_id,
+                    chunk_id: CustomId::from(
+                        ChunkId::from_position(mathtools::vector::Vec2::new(pos.x, pos.y)).unwrap_or_else(|e| {
+                            panic!("Erreur de conversion de position en chunk_id pour AOI Mode Change: {}", e);
+                        })
+                    ),
+                    new_mode: mode.to_u8(),
+                };
+
+                let _ = broker.peer.send(conn, stream, packet.to_bytes());
+            }
+
+            BrokerCommand::AoiPosUpdate { client_id, pos } => {
+                let packet = AoiPosUpdate {
+                    client_id: *client_id,
+                    chunk_id: CustomId::from(
+                        ChunkId::from_position(mathtools::vector::Vec2::new(pos.x, pos.y)).unwrap_or_else(|e| {
+                            panic!("Erreur de conversion de position en chunk_id pour AOI Mode Change: {}", e);
+                        })
+                    ),
+                };
+                let stream = GameStream::new(0, GameStreamReliability::Unreliable);
+
+                let _ = broker.peer.send(conn, &stream, packet.to_bytes());
             }
         }
     }

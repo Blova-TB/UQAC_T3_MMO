@@ -30,6 +30,13 @@ impl AoiMode {
         }
     }
     
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::NormalRange => 0,
+            Self::ExtendedRange => 1,
+        }
+    }
+    
     #[inline]
     pub const fn default() -> Self {
         Self::NormalRange
