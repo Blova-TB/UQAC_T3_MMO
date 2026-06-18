@@ -2,6 +2,8 @@ mod network;
 mod voronoi;
 mod shared;
 mod shard_id;
+mod spatial_service;
+mod client_id;
 
 use bytes::Bytes;
 use std::time::{Duration, Instant};
@@ -13,21 +15,18 @@ use std::sync::{Arc, RwLock};
 use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use internal_communication_protocol::internal_models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
 use crate::shard_id::{ShardId, ShardIdGenerator};
-use crate::voronoi::{ SpatialService, VoronoiConfig };
+use crate::spatial_service::SpatialService;
 
 fn main() {
     println!("VORONOOOOOOOOIIIIIIII");
     let mut spatial_service = SpatialService::new(
-        5.0,
-        VoronoiConfig::new(
-            80,
-            40,
-            15,
-            10000.0 * 10000.0,
-            150.0,
-            100000.0,
-            100000.0,
-        )
+        150.0,
+        80,
+        20,
+        15.0,
+        1.5,
+        100000.0,
+        100000.0
     );
 
     let orchestrator_addr = env::var("ORCHESTRATOR_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -186,8 +185,7 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) ->
         match CustomServerPacket::try_from_bytes(raw_bytes) {
             Some(CustomServerPacket::ServerSpawned(update)) => {
                 println!("Server Spawned");
-                //spatial_service.process_server_spawned(update)
-                None
+                spatial_service.process_server_spawned(update)
             }
             Some(CustomServerPacket::PositionUpdate(update)) => {
                 println!("Position Update");
@@ -201,8 +199,7 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) ->
             }
             Some(CustomServerPacket::PlayerJoinUpdate(update)) => {
                 println!("Player join update");
-                //spatial_service.process_player_join(update)
-                None
+                spatial_service.process_player_join(update)
             }
             Some(CustomServerPacket::ClientLeft(update)) => {
                 println!("client_left");

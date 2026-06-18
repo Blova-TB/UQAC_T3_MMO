@@ -1,4 +1,6 @@
 ﻿use slotmap::new_key_type;
+use crate::shard_id::ShardId;
+use mathtools::Vec2;
 
 // ============================================================================
 // 1. GÉOMÉTRIE ET MATHÉMATIQUES
@@ -20,6 +22,32 @@ impl Point2D {
         let dx = self.x - other.x;
         let dy = self.y - other.y;
         dx * dx + dy * dy
+    }
+
+    /// Méthode de commodité pour convertir rapidement en Vec2 en ligne.
+    #[inline]
+    pub fn as_vec2(&self) -> Vec2<f32> {
+        Vec2 { x: self.x, y: self.y }
+    }
+}
+
+// ============================================================================
+// CONVERSIONS IDIOMATIQUES RUST (Zero-Cost Abstractions)
+// ============================================================================
+
+/// Permet la conversion de mathtools::Vec2 vers Point2D
+impl From<Vec2<f32>> for Point2D {
+    #[inline]
+    fn from(vec: Vec2<f32>) -> Self {
+        Self { x: vec.x, y: vec.y }
+    }
+}
+
+/// Permet la conversion de Point2D vers mathtools::Vec2
+impl From<Point2D> for Vec2<f32> {
+    #[inline]
+    fn from(point: Point2D) -> Self {
+        Self { x: point.x, y: point.y }
     }
 }
 
@@ -45,7 +73,6 @@ impl AABB {
 // Génération de clés fortement typées pour éviter de mélanger un ID de joueur avec un ID de Shard.
 new_key_type! {
     pub struct PlayerKey;
-    pub struct ShardKey;
 }
 
 // ============================================================================
@@ -53,14 +80,11 @@ new_key_type! {
 // ============================================================================
 
 /// Représente un joueur (ou une entité réseau) dans le monde.
+
 pub struct Player {
     pub pos: Point2D,
-
-    /// Le serveur (Shard) qui possède l'autorité absolue sur ce joueur.
-    pub current_shard: ShardKey,
-
-    /// Liste des serveurs voisins où le joueur est répliqué en tant que fantôme (Interest Management).
-    pub ghost_shards: Vec<ShardKey>,
+    pub current_shard: ShardId, // <-- ici
+    pub ghost_shards: Vec<ShardId>, // <-- ici
 }
 
 /// Représente le "germe" d'une zone de Voronoï (un serveur physique/logique).
