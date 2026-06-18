@@ -4,6 +4,7 @@ use mathtools::Vec2 as MathVec2;
 use custom_id::custom_id::CustomId;
 use aoi_model::aoi_model::AoiMode;
 use client_communication_protocol::client_models::{PlayerInputPayload,WorldSyncPayload};
+use custom_id::chunk_id::ChunkId;
 
 #[derive(Message)]
 pub enum BrokerEvent {
@@ -37,7 +38,10 @@ pub enum BrokerEvent {
 
 #[derive(Message)]
 pub enum BrokerCommand {
-    SendWorldSync(WorldSyncPayload),
+    SendWorldSync {
+        chunk_id: ChunkId,
+        world_sync_payload: WorldSyncPayload,
+    },
     SendPositionUpdate {
         client_id: CustomId,
         pos: MathVec2<f32>,

@@ -25,8 +25,16 @@ impl InfrastructureNetwork {
     }
 
     pub fn send_to_broker(&self, data: Bytes) -> Result<(), String> {
-        let conn = self.broker_conn.as_ref().ok_or("Non connecté au Broker")?;
-        let stream = self.broker_reliable_stream.as_ref().ok_or("Flux Broker non établi")?;
+
+        let Some(conn) = self.broker_conn.as_ref() else {
+            println!("❌ Tentative d'envoi au Broker sans connexion établie !");
+            return Err("Non connecté au Broker".to_string());
+        };
+
+        let Some(stream) = self.broker_reliable_stream.as_ref() else {
+            println!("❌ Tentative d'envoi au Broker sans stream fiable établi !");
+            return Err("Flux fiable du Broker non établi".to_string());
+        };
 
         self.broker_peer.send(conn, stream, data)
             .map_err(|e| format!("Erreur d'envoi Broker: {:?}", e))

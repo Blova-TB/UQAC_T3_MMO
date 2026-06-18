@@ -4,7 +4,7 @@ use mathtools::Vec2;
 use crate::custom_id::{CustomId, IdType};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ChunkId(CustomId);
+pub struct ChunkId(pub CustomId);
 
 impl ChunkId {
     pub const CHUNK_SIZE: f32 = 500.0;
@@ -28,6 +28,12 @@ impl ChunkId {
     pub fn from_position(pos: Vec2<f32>) -> Result<Self, &'static str> {
         let x = (pos.x / Self::CHUNK_SIZE).floor() as i32;
         let y = (pos.y / Self::CHUNK_SIZE).floor() as i32;
+        Self::new(x, y)
+    }
+    
+    pub fn from_position_xy(posx: f32, posy: f32) -> Result<Self, &'static str> {
+        let x = (posx / Self::CHUNK_SIZE).floor() as i32;
+        let y = (posy / Self::CHUNK_SIZE).floor() as i32;
         Self::new(x, y)
     }
 

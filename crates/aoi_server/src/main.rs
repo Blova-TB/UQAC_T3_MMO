@@ -62,10 +62,12 @@ fn main() {
 
         // on envoye les sub et les unsub
         for sub in aoi_service.frame_result.sub.drain(..) {
-            infra_net.send_to_broker(sub.to_bytes()).unwrap_or(eprintln!("Erreur lors de l'envoi d'un sub au broker"));
+            println!("Envoi d'un sub au broker : custom_id = {:} topic_id = {:}", sub.custom_id.0, sub.topic_id);
+            let _ = infra_net.send_to_broker(sub.to_bytes());
         }
         for unsub in aoi_service.frame_result.unsub.drain(..) {
-            infra_net.send_to_broker(unsub.to_bytes()).unwrap_or(eprintln!("Erreur lors de l'envoi d'un unsub au broker"));
+            println!("Envoi d'un unsub au broker : custom_id = {:} topic_id = {:}", unsub.custom_id.0, unsub.topic_id);
+            let _ = infra_net.send_to_broker(unsub.to_bytes());
         }
 
         //todo: full reliable car aucune gestion de perte de paquets ...

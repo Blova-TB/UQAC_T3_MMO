@@ -146,7 +146,7 @@ services:
       context: ..
       dockerfile: docker/aoi_server.Dockerfile
     ports:
-      - "8081:8081"
+      - "8727:8727"
     environment:
       - BROKER_ADDR=${BROKER_ADDR:-broker}
       - BROKER_PORT=${BROKER_PORT:-5000}

@@ -6,9 +6,11 @@ use bevy::prelude::*;
 use bevy::app::AppExit;
 use rand::RngExt;
 use mathtools::Vec2 as MathVec2;
+use ahash::AHashMap;
 
 use custom_id::custom_id::CustomId;
 use client_communication_protocol::client_models::{PlayerData, WorldSyncPayload};
+use custom_id::chunk_id::ChunkId;
 
 pub struct GamePlugin;
 
@@ -160,19 +162,40 @@ fn broadcast_sync_to_clients(
 ) {
     if query.is_empty() { return; }
 
-    let entities_data: Vec<PlayerData> = query
-        .iter()
-        .map(|(transform, client)| {
-            let pos = transform.translation.truncate();
-            PlayerData {
-                client_id: client.id,
-                pos: (pos.x, pos.y),
-            }
-        })
-        .collect();
+    let mut result : AHashMap<ChunkId, Vec<PlayerData>> = AHashMap::new();
 
-    let sync_payload = WorldSyncPayload { entities: entities_data };
-    ev_commands.write(BrokerCommand::SendWorldSync(sync_payload));
+
+    for (transform, client) in query{
+        let pos = transform.translation.truncate();
+
+        let chunk_id = match ChunkId::from_position_xy(pos.x, pos.y) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("Erreur lors de la conversion de la position en ChunkId pour le client {}: {}", client.id.0, e);
+                continue;
+            }
+        };
+
+        result.entry(chunk_id)
+            .or_insert_with(Vec::new)
+            .push(
+                PlayerData {
+                    client_id: client.id,
+                    pos: (pos.x, pos.y),
+                }
+            );
+        println!("push in result Client {} is in chunk {} ({}, {}) at position ({:.2}, {:.2})", client.id.0, chunk_id.0.0, chunk_id.x(), chunk_id.y(), pos.x, pos.y);
+    }
+
+    for (chunk_id, entities_data) in result {
+        let sync_payload = WorldSyncPayload { entities: entities_data };
+
+        println!("📡 Envoi d'un snapshot du Broker pour le chunk {} ({}, {}) avec {} entités",chunk_id.0.0, chunk_id.x(), chunk_id.y(), sync_payload.entities.len());
+        ev_commands.write(BrokerCommand::SendWorldSync {
+            chunk_id,
+            world_sync_payload: sync_payload,
+        });
+    }
 }
 
 fn send_spatial_updates(
@@ -187,6 +210,7 @@ fn send_spatial_updates(
                 client_id: client.id,
                 pos: MathVec2::new(pos.x, pos.y),
             });
+            println!("Position update for client {}: ({:.2}, {:.2})", client.id.0, pos.x, pos.y);
             ev_commands.write(BrokerCommand::AoiPosUpdate {
                 client_id: client.id,
                 pos: Vec2::new(pos.x, pos.y),

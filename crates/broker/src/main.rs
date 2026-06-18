@@ -193,22 +193,30 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 BrokerHandshakeAoi::TAG => {
+                    println!("Handshake AOI reçu, connexion établie avec l'AOI Server !");
                     state.aoi_server_conn = Some(connection);
                     state.aoi_server_stream = Some(stream);
                 }
 
                 Subscribe::TAG => {
+                    println!("Subscribe received : ");
                     let Some(pkt) = Subscribe::try_from_bytes(data) else { return; };
+                    println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
                     state.routing_table.subscribe(pkt.custom_id.into(), pkt.topic_id);
                 }
 
                 Unsubscribe::TAG => {
+                    println!("Unsubscribe received : ");
                     let Some(pkt) = Unsubscribe::try_from_bytes(data) else { return; };
+                    println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
                     state.routing_table.unsubscribe(pkt.custom_id.into(), pkt.topic_id);
                 }
 
                 Publish::TAG => {
+
+                    println!("Publish received : ");
                     let Some(pkt) = Publish::try_from_bytes(data) else { return; };
+                    println!("topic_id = {}, payload size = {}", pkt.topic_id.0, pkt.payload.len());
                     let topic_u32: u32 = pkt.topic_id.into();
                     let final_msg = if let Some(&sender_client_id) = state.conn_to_client.get(&connection) {
                         BroadcastClient {

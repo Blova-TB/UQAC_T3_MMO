@@ -28,7 +28,6 @@ impl AoiService {
         client_id: ClientId,
         current_chunk: Vec2<i32>,
     ) -> Result<(), String> {
-
         self.process_player_move_and_aoi_change(
             client_id,
             current_chunk,
@@ -42,7 +41,9 @@ impl AoiService {
         current_chunk: Vec2<i32>,
         mode: AoiMode,
     ) -> Result<(), String> {
+
         if let Some(state) = self.players_states.get_mut(&client_id) {
+            println!("Processing move and AOI change for old client {:} to chunk {:?} with mode {:?}", client_id.0.0, current_chunk, mode);
             let old_bounds = state.bounds();
 
             let mode_changed = state.aoi_mode != mode;
@@ -70,6 +71,7 @@ impl AoiService {
                 Ok(())
             }
         } else {
+            println!("Processing move and AOI change for new client {:} to chunk {:?} with mode {:?}", client_id.0.0, current_chunk, mode);
             // nouv joueur
             let state = PlayerAoiState::new(current_chunk, mode);
             let bounds = state.bounds();

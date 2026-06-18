@@ -189,10 +189,10 @@ fn send_broker_commands(
 
     for command in ev_commands.read() {
         match command {
-            BrokerCommand::SendWorldSync(sync_payload) => {
+            BrokerCommand::SendWorldSync{chunk_id,world_sync_payload} => {
                 let publish_packet = Publish {
-                    topic_id: CustomId::from(broker.topic),
-                    payload: bitcode::encode(sync_payload),
+                    topic_id: chunk_id.0,
+                    payload: bitcode::encode(world_sync_payload),
                 };
                 let stream = GameStream::new(
                     LogicalStream::WorldSync as u16,
@@ -251,6 +251,7 @@ fn send_broker_commands(
                         })
                     ),
                 };
+                println!("Envoi d'une demande de mise à jour de position AOI au broker pour le client {} : chunk_id = {}", client_id.0, packet.chunk_id.0);
                 let stream = GameStream::new(0, GameStreamReliability::Unreliable);
 
                 let _ = broker.peer.send(conn, &stream, packet.to_bytes());
