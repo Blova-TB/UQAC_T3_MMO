@@ -1,12 +1,10 @@
-use mathtools::Vec2;
-// On retire complètement slotmap car on n'en a plus besoin ici !
 use spade::{DelaunayTriangulation, HasPosition, Point2, Triangulation};
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
 use crate::shard_id::{ShardId, ShardIdGenerator};
-use crate::client_id::ClientId; // <-- Ajout du ClientId réseau
-use crate::shared::{Point2D, Player, Shard, AABB}; // PlayerKey retiré
+use crate::client_id::ClientId;
+use crate::shared::{Point2D, Player, Shard, AABB};
 
 #[derive(Serialize)]
 pub struct VizPoint { pub x: f32, pub y: f32 }
@@ -64,28 +62,6 @@ pub struct VoronoiConfig {
     pub map_height: f32,
 }
 
-impl VoronoiConfig {
-    pub fn new(
-        split_occupancy_threshold: u8,
-        merge_occupancy_threshold: u8,
-        min_age_ticks: u64,
-        max_merge_dist_sq: f32,
-        ghost_margin: f32,
-        map_width: f32,
-        map_height: f32,
-    ) -> Self {
-        Self {
-            split_occupancy_threshold,
-            merge_occupancy_threshold,
-            min_age_ticks,
-            max_merge_dist_sq,
-            ghost_margin,
-            map_width,
-            map_height,
-        }
-    }
-}
-
 impl Default for VoronoiConfig {
     fn default() -> Self {
         Self {
@@ -114,7 +90,6 @@ pub struct PendingOp {
 
 pub enum VoronoiEvent {
     SpawnRequests(Vec<ShardId>),
-    TopologyCommitted(TopologyUpdate),
 }
 
 pub struct TopologyUpdate {
@@ -178,7 +153,7 @@ impl Voronoi {
         self.players.insert(client_id, Player { pos, current_shard: shard, ghost_shards: Vec::new() });
     }
 
-    pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<Player> {
+    pub fn remove_player(&mut self, client_id: ClientId) -> Option<Player> {
         Some(self.players.remove(&client_id)?)
     }
 
@@ -192,12 +167,10 @@ impl Voronoi {
         }
     }
 
-    // Récupère la shard actuelle d'un joueur
     pub fn get_player_shard(&self, key: ClientId) -> Option<ShardId> {
         self.players.get(&key).map(|p| p.current_shard)
     }
 
-    // Évalue si un joueur spécifique doit changer de shard (Handoff)
     pub fn check_single_handoff(&self, key: ClientId) -> Option<ShardId> {
         let player = self.players.get(&key)?;
         let optimal_shard = self.evaluate_handoff(player.pos, player.current_shard);
@@ -209,7 +182,6 @@ impl Voronoi {
         }
     }
 
-    // Remplace `shards_near` : trouve les shards visibles via les Ghost AABB
     pub fn get_visible_shards_for(&self, pos: Point2D) -> FxHashSet<ShardId> {
         let mut visible = FxHashSet::default();
         for (&shard_key, cell) in self.cells.iter() {
@@ -223,7 +195,7 @@ impl Voronoi {
     pub fn get_player_ghost_shards(&self, key: ClientId) -> Option<Vec<ShardId>> {
         self.players.get(&key).map(|p| p.ghost_shards.clone())
     }
-    
+
     pub fn set_player_ghost_shards(&mut self, key: ClientId, ghost_shards: Vec<ShardId>) {
         if let Some(player) = self.players.get_mut(&key) {
             player.ghost_shards = ghost_shards;
@@ -241,7 +213,6 @@ impl Voronoi {
     fn update_dynamics(&mut self) -> Option<VoronoiEvent> {
         let mut metrics: FxHashMap<ShardId, ShardMetrics> = FxHashMap::default();
 
-        // 1. Calcul des bornes AABB (Sans allocation)
         for (_, player) in self.players.iter() {
             let m = metrics.entry(player.current_shard).or_insert(ShardMetrics { count: 0, min_bound: Point2D { x: f32::MAX, y: f32::MAX }, max_bound: Point2D { x: f32::MIN, y: f32::MIN }});
             m.count += 1;
@@ -254,12 +225,9 @@ impl Voronoi {
         let mut to_remove = Vec::new();
         let mut new_spawns = Vec::new();
 
-        // Fonction locale pour vérifier si une Shard est déjà en cours de split/merge
         let is_pending = |id: ShardId| self.pending_ops.iter().any(|op| op.to_remove.contains(&id));
 
-        // -----------------------------------------------------------
-        // 2. SPLITS (Découpage d'un shard surchargé)
-        // -----------------------------------------------------------
+        // Split
         for (&key, shard) in self.shards.iter() {
             if is_pending(key) { continue; } // On ignore les shards déjà en transition !
 
@@ -280,10 +248,7 @@ impl Voronoi {
             }
         }
 
-        // -----------------------------------------------------------
-        // 3. MERGES (Fusion de deux shards sous-peuplés)
-        // On ne fait un merge que s'il n'y a pas déjà un split d'urgence en cours
-        // -----------------------------------------------------------
+        // Merge
         if to_remove.is_empty() {
             let shards_vec: Vec<_> = self.shards.iter().collect();
             let mut best_pair = None;
@@ -291,18 +256,16 @@ impl Voronoi {
 
             for i in 0..shards_vec.len() {
                 let (&k1, s1) = shards_vec[i];
-                if is_pending(k1) { continue; } // K1 est en transition, on l'ignore
+                if is_pending(k1) { continue; }
 
                 for j in (i+1)..shards_vec.len() {
                     let (&k2, s2) = shards_vec[j];
-                    if is_pending(k2) { continue; } // K2 est en transition, on l'ignore
+                    if is_pending(k2) { continue; }
 
-                    // On vérifie le cooldown pour éviter le "yoyo" split->merge->split
                     if self.current_tick < s1.spawn_tick + self.config.min_age_ticks || self.current_tick < s2.spawn_tick + self.config.min_age_ticks {
                         continue;
                     }
 
-                    // Télémétrie sécurisée
                     let occ1 = self.shard_occupancies.get(&k1).copied().unwrap_or(0);
                     let occ2 = self.shard_occupancies.get(&k2).copied().unwrap_or(0);
                     let combined_occupancy = occ1.saturating_add(occ2);
@@ -317,7 +280,6 @@ impl Voronoi {
                 }
             }
 
-            // Si on a trouvé deux candidats parfaits, on prépare leur destruction et la création de leur successeur au milieu
             if let Some((k1, k2, p1, p2)) = best_pair {
                 to_remove.push(k1);
                 to_remove.push(k2);
@@ -325,9 +287,6 @@ impl Voronoi {
             }
         }
 
-        // -----------------------------------------------------------
-        // 4. CONSTRUCTION DE L'OPÉRATION RÉSEAU EN ATTENTE
-        // -----------------------------------------------------------
         if to_remove.is_empty() { return None; }
 
         let mut to_spawn = Vec::new();
@@ -339,7 +298,6 @@ impl Voronoi {
             requests.push(new_key);
         }
 
-        // On enregistre l'opération en attente (qu'elle vienne d'un Split ou d'un Merge)
         self.pending_ops.push(PendingOp { to_remove, to_spawn });
 
         println!("[VORONOI] Opération topologique mise en attente. Demande de Spawn : {:?}", requests);
@@ -431,17 +389,6 @@ impl Voronoi {
         None
     }
 
-
-
-
-
-
-    // Changement de signature et ajout de `&` pour le get_mut
-    pub fn update_player_position(&mut self, key: ClientId, new_pos: Point2D) {
-        if let Some(player) = self.players.get_mut(&key) { player.pos = new_pos; }
-    }
-
-    // Changement de signature
     pub fn update_player_shard(&mut self, key: ClientId, new_shard: ShardId) {
         if let Some(player) = self.players.get_mut(&key) { player.current_shard = new_shard; }
     }
@@ -557,12 +504,11 @@ impl Voronoi {
             };
 
             let min_dist = min_neighbor_dist_sq.sqrt();
-            let safe_radius_sq = ((min_dist / 2.0)).max(0.0).powi(2);
+            let safe_radius_sq = (min_dist / 2.0).max(0.0).powi(2);
 
             self.cells.insert(key, ShardCellData { neighbors, safe_radius_sq, ghost_aabb });
         }
     }
-
 
     pub fn find_nearest_shard(&self, pos: Point2D) -> ShardId {
         let mut min_dist = f32::MAX;
@@ -608,15 +554,6 @@ impl Voronoi {
         }
         current_shard
     }
-
-
-
-    pub fn get_shards(&self) -> impl Iterator<Item = (&ShardId, &Shard)> { self.shards.iter() }
-
-    // Modification de l'itérateur pour retourner ClientId
-    pub fn get_players(&self) -> impl Iterator<Item = (&ClientId, &Player)> { self.players.iter() }
-
-    pub fn get_cells(&self) -> impl Iterator<Item = (&ShardId, &ShardCellData)> { self.cells.iter() }
 
     pub fn get_voronoi_polygons(&self) -> Vec<(ShardId, Vec<Point2D>)> {
         let mut results = Vec::new();

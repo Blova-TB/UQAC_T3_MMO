@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 
 use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
 use internal_communication_protocol::internal_models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
-use crate::shard_id::{ShardId, ShardIdGenerator};
+use crate::shard_id::{ShardId};
 use crate::spatial_service::SpatialService;
 
 fn main() {
@@ -139,9 +139,7 @@ fn main() {
             }
         }
 
-        // --- 2. ⚙️ LE TICK DU MOTEUR SPATIAL ---
-        // On donne le temps écoulé au SpatialService, qui va faire avancer le Voronoï
-        // et nous recracher les paquets réseau s'il y a eu un Split ou un Merge.
+
         if let Some(mut tick_packets) = spatial_service.tick(dt) {
             cmd.append(&mut tick_packets);
         }
@@ -149,7 +147,7 @@ fn main() {
         // --- 🚀 INITIALISATION DE LA PREMIÈRE SHARD ---
         if !root_shard_requested && startup_time.elapsed() >= orchestrator_warmup_delay {
             let spawn_packet = SpawnServer {
-                shard_id: ShardId::ROOT.into(), // Conversion automatique en u32
+                shard_id: ShardId::ROOT.into(),
             };
 
             if infra_net.send_to_orchestrator(spawn_packet.to_bytes()).is_ok() {
@@ -173,15 +171,13 @@ fn main() {
         }
 
         // --- [SYNCHRONISATION WEB] ---
-        // On extrait l'état du moteur de jeu et on l'injecte dans le thread HTTP à chaque frame
         if let Ok(mut lock) = shared_json.write() {
-            // Nécessite la fonction extract_viz_state() implémentée dans spatial.rs
             *lock = spatial_service.extract_viz_state();
         }
 
         let elapsed = frame_start.elapsed();
         if elapsed < target_tick_duration {
-            std::thread::sleep(target_tick_duration - elapsed);
+            thread::sleep(target_tick_duration - elapsed);
         }
         if let Err(e) = io::stdout().flush() {
             eprintln!("Erreur lors du flush stdout: {}", e);
