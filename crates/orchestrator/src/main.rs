@@ -246,13 +246,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    println!("🧹 [Shutdown] Début du nettoyage rapide basé sur Redis...");
+
     if let Ok(servers) = database.get_all_servers().await {
+        let mut cleanup_tasks = vec![];
+
         for server in servers {
-            let _ = docker_manager.remove_game_server(&server.server_id).await;
-            let _ = database.remove_server(&server.server_id).await;
+            let docker_clone = docker_manager.clone();
+            let db_clone = database.clone();
+            let server_id = server.server_id.clone();
+
+            cleanup_tasks.push(tokio::spawn(async move {
+                let _ = docker_clone.remove_game_server(&server_id).await;
+                let _ = db_clone.remove_server(&server_id).await;
+            }));
         }
+
+        futures::future::join_all(cleanup_tasks).await;
     }
+
     let _ = orchestrator_peer.shutdown();
+    println!("✅ [Shutdown] Arrêt propre terminé !");
     Ok(())
 }
 
