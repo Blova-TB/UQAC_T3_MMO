@@ -80,7 +80,9 @@
                 ctx.beginPath();
                 poly.vertices.forEach((v, index) => {
                     const vx = v.x * scaleX;
-                    const vy = v.y * scaleY;
+                    // INVERSION Y ICI
+                    const vy = canvas.height - (v.y * scaleY);
+
                     if (index === 0) ctx.moveTo(vx, vy);
                     else ctx.lineTo(vx, vy);
                 });
@@ -100,10 +102,13 @@
         if (state.ghost_aabbs) {
             state.ghost_aabbs.forEach(aabb => {
                 const baseColor = getColor(aabb.shard_id);
-                const x = aabb.min_x * scaleX;
-                const y = aabb.min_y * scaleY;
+
                 const w = (aabb.max_x - aabb.min_x) * scaleX;
                 const h = (aabb.max_y - aabb.min_y) * scaleY;
+                const x = aabb.min_x * scaleX;
+
+                // INVERSION Y ICI : On prend le max_y pour le haut du rectangle sur le canvas
+                const y = canvas.height - (aabb.max_y * scaleY);
 
                 ctx.strokeStyle = hexToRgba(baseColor, 0.8);
                 ctx.lineWidth = 1;
@@ -117,7 +122,8 @@
         if (state.shards) {
             state.shards.forEach(shard => {
                 const sx = shard.x * scaleX;
-                const sy = shard.y * scaleY;
+                // INVERSION Y ICI
+                const sy = canvas.height - (shard.y * scaleY);
 
                 ctx.beginPath();
                 ctx.arc(sx, sy, 8, 0, Math.PI * 2);
@@ -133,7 +139,8 @@
         if (state.players) {
             state.players.forEach(player => {
                 const px = player.x * scaleX;
-                const py = player.y * scaleY;
+                // INVERSION Y ICI
+                const py = canvas.height - (player.y * scaleY);
 
                 ctx.beginPath();
                 ctx.arc(px, py, 4, 0, Math.PI * 2);

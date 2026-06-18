@@ -20,9 +20,9 @@ use crate::spatial_service::SpatialService;
 fn main() {
     println!("VORONOOOOOOOOIIIIIIII");
     let mut spatial_service = SpatialService::new(
-        150.0,
-        80,
-        20,
+        1000.0,
+        70,
+        50,
         15.0,
         1.5,
         100000.0,
@@ -75,7 +75,7 @@ fn main() {
     let startup_time = Instant::now();
     let orchestrator_warmup_delay = Duration::from_secs(10); // 3 secondes de délai (ajustable)
 
-    let shard_id_generator = ShardIdGenerator::new();
+    let mut last_tick = Instant::now();
 
     // ============================================================================
     // SERVEUR HTTP POUR LE DASHBOARD WEB
@@ -112,6 +112,8 @@ fn main() {
 
     loop {
         let frame_start = Instant::now();
+        let dt = last_tick.elapsed().as_secs_f32();
+        last_tick = frame_start;
         let events = infra_net.poll_events();
 
         let mut cmd: Vec<(PeerType, Bytes)> = Vec::new();
@@ -135,6 +137,13 @@ fn main() {
             if let Some(mut new_packets) = event_result {
                 cmd.append(&mut new_packets);
             }
+        }
+
+        // --- 2. ⚙️ LE TICK DU MOTEUR SPATIAL ---
+        // On donne le temps écoulé au SpatialService, qui va faire avancer le Voronoï
+        // et nous recracher les paquets réseau s'il y a eu un Split ou un Merge.
+        if let Some(mut tick_packets) = spatial_service.tick(dt) {
+            cmd.append(&mut tick_packets);
         }
 
         // --- 🚀 INITIALISATION DE LA PREMIÈRE SHARD ---
@@ -184,32 +193,23 @@ fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) ->
     let cmd : Option<Vec<(PeerType,Bytes)>> =
         match CustomServerPacket::try_from_bytes(raw_bytes) {
             Some(CustomServerPacket::ServerSpawned(update)) => {
-                println!("Server Spawned");
                 spatial_service.process_server_spawned(update)
             }
             Some(CustomServerPacket::PositionUpdate(update)) => {
-                println!("Position Update");
-                //spatial_service.process_position_update(update)
-                None
+                spatial_service.process_position_update(update)
             }
             Some(CustomServerPacket::HandoffAccept(update)) => {
                 println!("handoff_accept");
-                //spatial_service.process_handoff_accept(update)
-                None
+                spatial_service.process_handoff_accept(update)
             }
             Some(CustomServerPacket::PlayerJoinUpdate(update)) => {
-                println!("Player join update");
                 spatial_service.process_player_join(update)
             }
             Some(CustomServerPacket::ClientLeft(update)) => {
-                println!("client_left");
-                //spatial_service.process_player_left(update)
-                None
+                spatial_service.process_player_left(update)
             }
             Some(CustomServerPacket::ServerHeartBeat(update)) => {
-                println!("server_heartbeat");
-                //spatial_service.process_server_heartbeat(update)
-                None
+                spatial_service.process_server_heartbeat(update)
             }
             None => {
                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu du Broker.");

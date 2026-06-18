@@ -2,6 +2,7 @@ use mathtools::Vec2;
 // On retire complètement slotmap car on n'en a plus besoin ici !
 use spade::{DelaunayTriangulation, HasPosition, Point2, Triangulation};
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use serde::Serialize;
 use crate::shard_id::{ShardId, ShardIdGenerator};
 use crate::client_id::ClientId; // <-- Ajout du ClientId réseau
@@ -35,8 +36,6 @@ pub struct VizPlayer { pub id: String, pub x: f32, pub y: f32, pub shard_id: Str
 // ============================================================================
 // 1. STRUCTURES ET TYPES DE DONNÉES
 // ============================================================================
-
-const HYSTERESIS: f32 = 15.0;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum VertexKind { Real(ShardId), Ghost }
@@ -108,6 +107,22 @@ struct ShardMetrics {
     max_bound: Point2D,
 }
 
+pub struct PendingOp {
+    pub to_remove: Vec<ShardId>,
+    pub to_spawn: Vec<(ShardId, Point2D, bool)>,
+}
+
+pub enum VoronoiEvent {
+    SpawnRequests(Vec<ShardId>),
+    TopologyCommitted(TopologyUpdate),
+}
+
+pub struct TopologyUpdate {
+    pub spawned_shards: Vec<ShardId>,
+    pub despawned_shards: Vec<ShardId>,
+    pub forced_handoffs: Vec<(ClientId, ShardId, ShardId)>,
+}
+
 // ============================================================================
 // 2. LE SERVICE VORONOI
 // ============================================================================
@@ -119,6 +134,7 @@ pub struct Voronoi {
     cells: FxHashMap<ShardId, ShardCellData>,
     id_generator: ShardIdGenerator,
     triangulation: DelaunayTriangulation<ShardVertex>,
+    pending_ops: Vec<PendingOp>,
     current_tick: u64,
     voronoi_interval: f32,
     voronoi_timer: f32,
@@ -138,6 +154,7 @@ impl Voronoi {
             cells: FxHashMap::default(),
             id_generator: ShardIdGenerator::new(),
             triangulation: DelaunayTriangulation::new(),
+            pending_ops: Vec::new(),
             current_tick: 0,
             voronoi_interval: 1.0 / updates_per_second,
             voronoi_timer: 0.0,
@@ -146,14 +163,6 @@ impl Voronoi {
         };
         spatial.rebuild_triangulation();
         spatial
-    }
-
-    pub fn update_map_size(&mut self, width: f32, height: f32) {
-        if self.config.map_width != width || self.config.map_height != height {
-            self.config.map_width = width;
-            self.config.map_height = height;
-            self.update_voronoi_cache();
-        }
     }
 
     pub fn init_base_shards(&mut self, x: f32, y: f32) -> ShardId {
@@ -165,43 +174,276 @@ impl Voronoi {
         root_id
     }
 
-    // Changement de signature : PlayerKey -> ClientId
-    pub fn add_player(&mut self, key: ClientId, pos: Point2D, initial_shard: ShardId) {
-        self.players.insert(key, Player { pos, current_shard: initial_shard, ghost_shards: Vec::new() });
-    }
-
     pub fn insert_player(&mut self, client_id: ClientId, pos: Point2D, shard: ShardId) {
         self.players.insert(client_id, Player { pos, current_shard: shard, ghost_shards: Vec::new() });
     }
 
-    // Changement de signature et ajout de `&` pour le get_mut
-    pub fn update_player_position(&mut self, key: ClientId, new_pos: Point2D) {
-        if let Some(player) = self.players.get_mut(&key) { player.pos = new_pos; }
+    pub fn remove_player(&mut self, client_id: ClientId, shard_id: ShardId) -> Option<Player> {
+        Some(self.players.remove(&client_id)?)
     }
 
-    pub fn update_shard_occupancies(&mut self, occupancies: FxHashMap<ShardId, u8>) {
-        self.shard_occupancies = occupancies;
+    pub fn update_position_get_old(&mut self, key: ClientId, new_pos: Point2D) -> Option<Point2D> {
+        if let Some(player) = self.players.get_mut(&key) {
+            let old_pos = player.pos;
+            player.pos = new_pos;
+            Some(old_pos)
+        } else {
+            None
+        }
     }
 
-    // Changement de signature
-    pub fn update_player_shard(&mut self, key: ClientId, new_shard: ShardId) {
-        if let Some(player) = self.players.get_mut(&key) { player.current_shard = new_shard; }
+    // Récupère la shard actuelle d'un joueur
+    pub fn get_player_shard(&self, key: ClientId) -> Option<ShardId> {
+        self.players.get(&key).map(|p| p.current_shard)
     }
 
-    pub fn tick(&mut self, dt: f32) -> bool {
+    // Évalue si un joueur spécifique doit changer de shard (Handoff)
+    pub fn check_single_handoff(&self, key: ClientId) -> Option<ShardId> {
+        let player = self.players.get(&key)?;
+        let optimal_shard = self.evaluate_handoff(player.pos, player.current_shard);
+
+        if optimal_shard != player.current_shard {
+            Some(optimal_shard)
+        } else {
+            None
+        }
+    }
+
+    // Remplace `shards_near` : trouve les shards visibles via les Ghost AABB
+    pub fn get_visible_shards_for(&self, pos: Point2D) -> FxHashSet<ShardId> {
+        let mut visible = FxHashSet::default();
+        for (&shard_key, cell) in self.cells.iter() {
+            if cell.ghost_aabb.contains(&pos) {
+                visible.insert(shard_key);
+            }
+        }
+        visible
+    }
+
+    pub fn get_player_ghost_shards(&self, key: ClientId) -> Option<Vec<ShardId>> {
+        self.players.get(&key).map(|p| p.ghost_shards.clone())
+    }
+    
+    pub fn set_player_ghost_shards(&mut self, key: ClientId, ghost_shards: Vec<ShardId>) {
+        if let Some(player) = self.players.get_mut(&key) {
+            player.ghost_shards = ghost_shards;
+        }
+    }
+
+    pub fn get_player_pos(&self, key: ClientId) -> Option<Point2D> {
+        self.players.get(&key).map(|p| p.pos)
+    }
+
+    pub fn set_shard_occupancy(&mut self, shard_id: ShardId, occupancy: u8) {
+        self.shard_occupancies.insert(shard_id, occupancy);
+    }
+
+    fn update_dynamics(&mut self) -> Option<VoronoiEvent> {
+        let mut metrics: FxHashMap<ShardId, ShardMetrics> = FxHashMap::default();
+
+        // 1. Calcul des bornes AABB (Sans allocation)
+        for (_, player) in self.players.iter() {
+            let m = metrics.entry(player.current_shard).or_insert(ShardMetrics { count: 0, min_bound: Point2D { x: f32::MAX, y: f32::MAX }, max_bound: Point2D { x: f32::MIN, y: f32::MIN }});
+            m.count += 1;
+            m.min_bound.x = m.min_bound.x.min(player.pos.x);
+            m.min_bound.y = m.min_bound.y.min(player.pos.y);
+            m.max_bound.x = m.max_bound.x.max(player.pos.x);
+            m.max_bound.y = m.max_bound.y.max(player.pos.y);
+        }
+
+        let mut to_remove = Vec::new();
+        let mut new_spawns = Vec::new();
+
+        // Fonction locale pour vérifier si une Shard est déjà en cours de split/merge
+        let is_pending = |id: ShardId| self.pending_ops.iter().any(|op| op.to_remove.contains(&id));
+
+        // -----------------------------------------------------------
+        // 2. SPLITS (Découpage d'un shard surchargé)
+        // -----------------------------------------------------------
+        for (&key, shard) in self.shards.iter() {
+            if is_pending(key) { continue; } // On ignore les shards déjà en transition !
+
+            let current_occupancy = self.shard_occupancies.get(&key).copied().unwrap_or(0);
+            if let Some(m) = metrics.get(&key) {
+                if current_occupancy >= self.config.split_occupancy_threshold && self.current_tick >= shard.spawn_tick + self.config.min_age_ticks {
+                    to_remove.push(key);
+                    let spread_x = m.max_bound.x - m.min_bound.x;
+                    let spread_y = m.max_bound.y - m.min_bound.y;
+                    let (p1, p2) = if spread_x > spread_y {
+                        (Point2D { x: m.min_bound.x, y: shard.pos.y }, Point2D { x: m.max_bound.x, y: shard.pos.y })
+                    } else {
+                        (Point2D { x: shard.pos.x, y: m.min_bound.y }, Point2D { x: shard.pos.x, y: m.max_bound.y })
+                    };
+                    new_spawns.push(p1);
+                    new_spawns.push(p2);
+                }
+            }
+        }
+
+        // -----------------------------------------------------------
+        // 3. MERGES (Fusion de deux shards sous-peuplés)
+        // On ne fait un merge que s'il n'y a pas déjà un split d'urgence en cours
+        // -----------------------------------------------------------
+        if to_remove.is_empty() {
+            let shards_vec: Vec<_> = self.shards.iter().collect();
+            let mut best_pair = None;
+            let mut min_dist_sq = f32::MAX;
+
+            for i in 0..shards_vec.len() {
+                let (&k1, s1) = shards_vec[i];
+                if is_pending(k1) { continue; } // K1 est en transition, on l'ignore
+
+                for j in (i+1)..shards_vec.len() {
+                    let (&k2, s2) = shards_vec[j];
+                    if is_pending(k2) { continue; } // K2 est en transition, on l'ignore
+
+                    // On vérifie le cooldown pour éviter le "yoyo" split->merge->split
+                    if self.current_tick < s1.spawn_tick + self.config.min_age_ticks || self.current_tick < s2.spawn_tick + self.config.min_age_ticks {
+                        continue;
+                    }
+
+                    // Télémétrie sécurisée
+                    let occ1 = self.shard_occupancies.get(&k1).copied().unwrap_or(0);
+                    let occ2 = self.shard_occupancies.get(&k2).copied().unwrap_or(0);
+                    let combined_occupancy = occ1.saturating_add(occ2);
+
+                    if combined_occupancy <= self.config.merge_occupancy_threshold {
+                        let dist_sq = s1.pos.distance_sq(&s2.pos);
+                        if dist_sq < min_dist_sq && dist_sq < self.config.max_merge_dist_sq {
+                            min_dist_sq = dist_sq;
+                            best_pair = Some((k1, k2, s1.pos, s2.pos));
+                        }
+                    }
+                }
+            }
+
+            // Si on a trouvé deux candidats parfaits, on prépare leur destruction et la création de leur successeur au milieu
+            if let Some((k1, k2, p1, p2)) = best_pair {
+                to_remove.push(k1);
+                to_remove.push(k2);
+                new_spawns.push(Point2D { x: (p1.x + p2.x)/2.0, y: (p1.y + p2.y)/2.0 });
+            }
+        }
+
+        // -----------------------------------------------------------
+        // 4. CONSTRUCTION DE L'OPÉRATION RÉSEAU EN ATTENTE
+        // -----------------------------------------------------------
+        if to_remove.is_empty() { return None; }
+
+        let mut to_spawn = Vec::new();
+        let mut requests = Vec::new();
+
+        for pos in new_spawns {
+            let new_key = self.id_generator.generate();
+            to_spawn.push((new_key, pos, false));
+            requests.push(new_key);
+        }
+
+        // On enregistre l'opération en attente (qu'elle vienne d'un Split ou d'un Merge)
+        self.pending_ops.push(PendingOp { to_remove, to_spawn });
+
+        println!("[VORONOI] Opération topologique mise en attente. Demande de Spawn : {:?}", requests);
+        Some(VoronoiEvent::SpawnRequests(requests))
+    }
+
+    pub fn confirm_server_spawned(&mut self, shard_id: ShardId) -> Option<TopologyUpdate> {
+        let mut completed_op_index = None;
+
+        for (i, op) in self.pending_ops.iter_mut().enumerate() {
+            let mut all_spawned = true;
+            let mut found = false;
+
+            for (spawn_id, _, is_spawned) in &mut op.to_spawn {
+                if *spawn_id == shard_id {
+                    *is_spawned = true;
+                    found = true;
+                }
+                if !*is_spawned { all_spawned = false; }
+            }
+
+            if found && all_spawned {
+                completed_op_index = Some(i);
+                break;
+            }
+        }
+
+        if let Some(index) = completed_op_index {
+            let op = self.pending_ops.remove(index);
+            return Some(self.commit_topology_operation(op));
+        }
+
+        None
+    }
+
+    fn commit_topology_operation(&mut self, op: PendingOp) -> TopologyUpdate {
+        let mut update = TopologyUpdate {
+            spawned_shards: Vec::new(),
+            despawned_shards: Vec::new(),
+            forced_handoffs: Vec::new(),
+        };
+
+        for key in op.to_remove {
+            self.shards.remove(&key);
+            self.shard_occupancies.remove(&key);
+            self.id_generator.free(key);
+            update.despawned_shards.push(key);
+        }
+
+        for (new_key, pos, _) in op.to_spawn {
+            self.shards.insert(new_key, Shard { pos, spawn_tick: self.current_tick });
+            update.spawned_shards.push(new_key);
+        }
+
+        // Reconstruire absolument le monde géométrique ICI pour calculer les nouvelles distances
+        self.rebuild_triangulation();
+
+        // Évacuation forcée des joueurs qui étaient sur les serveurs détruits
+        let mut reassignments = Vec::new();
+        for (&client_id, player) in self.players.iter() {
+            if update.despawned_shards.contains(&player.current_shard) {
+                let new_shard = self.find_nearest_shard(player.pos);
+                reassignments.push((client_id, player.current_shard, new_shard));
+            }
+        }
+
+        for (client_id, old_shard, new_shard) in reassignments {
+            if let Some(player) = self.players.get_mut(&client_id) { player.current_shard = new_shard; }
+            update.forced_handoffs.push((client_id, old_shard, new_shard));
+        }
+
+        println!("[VORONOI] Opération topologique validée !");
+        update
+    }
+
+    pub fn tick(&mut self, dt: f32) -> Option<VoronoiEvent> {
         self.voronoi_timer += dt;
 
         if self.voronoi_timer >= self.voronoi_interval {
             self.voronoi_timer -= self.voronoi_interval;
             self.current_tick += 1;
 
-            let geometry_changed = self.update_dynamics();
+            let event = self.update_dynamics();
             self.relax_shards(0.1);
             self.rebuild_triangulation();
 
-            return true;
+            return event;
         }
-        false
+        None
+    }
+
+
+
+
+
+
+    // Changement de signature et ajout de `&` pour le get_mut
+    pub fn update_player_position(&mut self, key: ClientId, new_pos: Point2D) {
+        if let Some(player) = self.players.get_mut(&key) { player.pos = new_pos; }
+    }
+
+    // Changement de signature
+    pub fn update_player_shard(&mut self, key: ClientId, new_shard: ShardId) {
+        if let Some(player) = self.players.get_mut(&key) { player.current_shard = new_shard; }
     }
 
     pub fn rebuild_triangulation(&mut self) {
@@ -269,96 +511,6 @@ impl Voronoi {
         }
     }
 
-    fn update_dynamics(&mut self) -> bool {
-        let mut metrics: FxHashMap<ShardId, ShardMetrics> = FxHashMap::default();
-
-        for (_, player) in self.players.iter() {
-            let m = metrics.entry(player.current_shard).or_insert(ShardMetrics {
-                count: 0,
-                min_bound: Point2D { x: f32::MAX, y: f32::MAX },
-                max_bound: Point2D { x: f32::MIN, y: f32::MIN },
-            });
-            m.count += 1;
-            m.min_bound.x = m.min_bound.x.min(player.pos.x);
-            m.min_bound.y = m.min_bound.y.min(player.pos.y);
-            m.max_bound.x = m.max_bound.x.max(player.pos.x);
-            m.max_bound.y = m.max_bound.y.max(player.pos.y);
-        }
-
-        let mut to_remove = Vec::new();
-        let mut new_spawns = Vec::new();
-
-        for (&key, shard) in self.shards.iter() {
-            let current_occupancy = self.shard_occupancies.get(&key).copied().unwrap_or(0);
-
-            if let Some(m) = metrics.get(&key) {
-                if current_occupancy >= self.config.split_occupancy_threshold && self.current_tick >= shard.spawn_tick + self.config.min_age_ticks {
-                    to_remove.push(key);
-
-                    let spread_x = m.max_bound.x - m.min_bound.x;
-                    let spread_y = m.max_bound.y - m.min_bound.y;
-
-                    let (p1, p2) = if spread_x > spread_y {
-                        (Point2D { x: m.min_bound.x, y: shard.pos.y }, Point2D { x: m.max_bound.x, y: shard.pos.y })
-                    } else {
-                        (Point2D { x: shard.pos.x, y: m.min_bound.y }, Point2D { x: shard.pos.x, y: m.max_bound.y })
-                    };
-                    new_spawns.push(p1);
-                    new_spawns.push(p2);
-                }
-            }
-        }
-
-        if to_remove.is_empty() {
-            let shards_vec: Vec<_> = self.shards.iter().collect();
-            let mut best_pair = None;
-            let mut min_dist_sq = f32::MAX;
-
-            for i in 0..shards_vec.len() {
-                for j in (i+1)..shards_vec.len() {
-                    let (&k1, s1) = shards_vec[i];
-                    let (&k2, s2) = shards_vec[j];
-
-                    if self.current_tick < s1.spawn_tick + self.config.min_age_ticks || self.current_tick < s2.spawn_tick + self.config.min_age_ticks {
-                        continue;
-                    }
-
-                    let occ1 = self.shard_occupancies.get(&k1).copied().unwrap_or(0);
-                    let occ2 = self.shard_occupancies.get(&k2).copied().unwrap_or(0);
-                    let combined_occupancy = occ1.saturating_add(occ2);
-
-                    if combined_occupancy <= self.config.merge_occupancy_threshold {
-                        let dist_sq = s1.pos.distance_sq(&s2.pos);
-                        if dist_sq < min_dist_sq && dist_sq < self.config.max_merge_dist_sq {
-                            min_dist_sq = dist_sq;
-                            best_pair = Some((k1, k2, s1.pos, s2.pos));
-                        }
-                    }
-                }
-            }
-
-            if let Some((k1, k2, p1, p2)) = best_pair {
-                to_remove.push(k1);
-                to_remove.push(k2);
-                new_spawns.push(Point2D { x: (p1.x + p2.x)/2.0, y: (p1.y + p2.y)/2.0 });
-            }
-        }
-
-        let geometry_changed = !to_remove.is_empty();
-
-        for key in to_remove {
-            self.shards.remove(&key);
-            self.id_generator.free(key);
-        }
-
-        for pos in new_spawns {
-            let new_key = self.id_generator.generate();
-            self.shards.insert(new_key, Shard { pos, spawn_tick: self.current_tick });
-        }
-
-        geometry_changed
-    }
-
     pub fn update_voronoi_cache(&mut self) {
         self.cells.clear();
         let map_min = Point2D { x: 0.0, y: 0.0 };
@@ -405,30 +557,12 @@ impl Voronoi {
             };
 
             let min_dist = min_neighbor_dist_sq.sqrt();
-            let safe_radius_sq = ((min_dist / 2.0) - HYSTERESIS).max(0.0).powi(2);
+            let safe_radius_sq = ((min_dist / 2.0)).max(0.0).powi(2);
 
             self.cells.insert(key, ShardCellData { neighbors, safe_radius_sq, ghost_aabb });
         }
     }
 
-    // Retourne maintenant un FxHashMap avec des ClientId
-    pub fn compute_ghost_visibility(&self) -> FxHashMap<ClientId, Vec<ShardId>> {
-        let mut visibilities = FxHashMap::default();
-
-        for (&client_id, player) in self.players.iter() {
-            let mut visible_shards = Vec::new();
-            for (&shard_key, cell) in self.cells.iter() {
-                if shard_key == player.current_shard { continue; }
-                if cell.ghost_aabb.contains(&player.pos) {
-                    visible_shards.push(shard_key);
-                }
-            }
-            if !visible_shards.is_empty() {
-                visibilities.insert(client_id, visible_shards);
-            }
-        }
-        visibilities
-    }
 
     pub fn find_nearest_shard(&self, pos: Point2D) -> ShardId {
         let mut min_dist = f32::MAX;
@@ -469,25 +603,13 @@ impl Voronoi {
                     }
                 }
 
-                if best_key != current_shard && best_dist_sq < (current_dist_sq - (HYSTERESIS * HYSTERESIS)) {
-                    return best_key;
-                }
+                return best_key;
             }
         }
         current_shard
     }
 
-    // Retourne un tuple comprenant le ClientId
-    pub fn compute_pending_handoffs(&self) -> Vec<(ClientId, ShardId, ShardId)> {
-        let mut handoffs = Vec::new();
-        for (&client_id, player) in self.players.iter() {
-            let optimal_shard = self.evaluate_handoff(player.pos, player.current_shard);
-            if optimal_shard != player.current_shard {
-                handoffs.push((client_id, player.current_shard, optimal_shard));
-            }
-        }
-        handoffs
-    }
+
 
     pub fn get_shards(&self) -> impl Iterator<Item = (&ShardId, &Shard)> { self.shards.iter() }
 
