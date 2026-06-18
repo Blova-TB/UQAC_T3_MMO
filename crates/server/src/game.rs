@@ -210,7 +210,7 @@ fn send_spatial_updates(
                 client_id: client.id,
                 pos: MathVec2::new(pos.x, pos.y),
             });
-            println!("Position update for client {}: ({:.2}, {:.2})", client.id.0, pos.x, pos.y);
+            // println!("Position update for client {}: ({:.2}, {:.2})", client.id.0, pos.x, pos.y);
             ev_commands.write(BrokerCommand::AoiPosUpdate {
                 client_id: client.id,
                 pos: Vec2::new(pos.x, pos.y),

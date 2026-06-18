@@ -152,6 +152,9 @@ services:
       - BROKER_PORT=${BROKER_PORT:-5000}
 
       - RUST_LOG=${RUST_LOG:-info}
+    depends_on:
+      broker:
+        condition: service_healthy
     networks:
       - game-network
 

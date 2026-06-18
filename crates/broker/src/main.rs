@@ -281,7 +281,6 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 PositionUpdate::TAG => {
-                    println!("PositionUpdate received");
                     if let Some(s_conn) = &state.spatial_server_conn {
                         let unreliable_stream = GameStream::new(
                             STREAM_PHYSICS,
@@ -414,7 +413,10 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     }
                 }
 
-                _ => warn!("Tag non reconnu : 0x{:02X}", tag),
+                _ => {
+                    println!("Message reçu avec tag inconnu : 0x{:02X}", tag);
+                    warn!("Tag non reconnu : 0x{:02X}", tag)
+                },
             }
         }
         _ => {}

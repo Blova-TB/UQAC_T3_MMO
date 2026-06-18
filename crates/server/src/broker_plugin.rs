@@ -170,6 +170,9 @@ fn poll_broker(
                     broker.connection = None;
                     broker.reliable_stream = None;
                 }
+                GameNetworkEvent::Error { connection, inner } => {
+                    error!("❌ Erreur réseau interceptée sur la connexion {:?} : {:?}", connection, inner);
+                }
                 _ => {}
             },
             Ok(None) => break,
@@ -202,14 +205,17 @@ fn send_broker_commands(
                 let _ = broker.peer.send(conn, &stream, publish_packet.to_bytes());
             }
             BrokerCommand::SendPositionUpdate { client_id, pos } => {
-                println!("Envoi d'une mise à jour de position au broker pour le client {} : ({:.2}, {:.2})", client_id.0, pos.x, pos.y);
                 let packet = PositionUpdate {
                     client_id: *client_id,
                     pos: MathVec2::new(pos.x, pos.y),
                 };
-                let stream = GameStream::new(0, GameStreamReliability::Unreliable);
+                let stream = GameStream::new(13, GameStreamReliability::Unreliable);
 
-                let _ = broker.peer.send(conn, &stream, packet.to_bytes());
+                match broker.peer.send(conn, &stream, packet.to_bytes())
+                {
+                    Ok(_) => {}
+                    Err(e) => warn!("Erreur lors de l'envoi de la mise à jour de position au Broker pour le client {}: {:?} : ({:.2}, {:.2})", client_id.0, e, pos.x, pos.y),
+                }
             }
             BrokerCommand::SendHandoffAccept { shard_id, entity_id } => {
                 let Some(stream) = broker.reliable_stream.as_ref() else {
