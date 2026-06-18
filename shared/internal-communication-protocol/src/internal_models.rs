@@ -171,8 +171,6 @@ define_packet!{
 define_packet! {
     SpawnServer(0x20) {
         shard_id: CustomId,
-        pos_min: Vec2<f32>,
-        pos_max: Vec2<f32>,
     }
 }
 
