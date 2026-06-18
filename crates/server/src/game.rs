@@ -184,13 +184,13 @@ fn broadcast_sync_to_clients(
                     pos: (pos.x, pos.y),
                 }
             );
-        println!("push in result Client {} is in chunk {} ({}, {}) at position ({:.2}, {:.2})", client.id.0, chunk_id.0.0, chunk_id.x(), chunk_id.y(), pos.x, pos.y);
+        // println!("push in result Client {} is in chunk {} ({}, {}) at position ({:.2}, {:.2})", client.id.0, chunk_id.0.0, chunk_id.x(), chunk_id.y(), pos.x, pos.y);
     }
 
     for (chunk_id, entities_data) in result {
         let sync_payload = WorldSyncPayload { entities: entities_data };
 
-        println!("📡 Envoi d'un snapshot du Broker pour le chunk {} ({}, {}) avec {} entités",chunk_id.0.0, chunk_id.x(), chunk_id.y(), sync_payload.entities.len());
+        // println!("📡 Envoi d'un snapshot du Broker pour le chunk {} ({}, {}) avec {} entités",chunk_id.0.0, chunk_id.x(), chunk_id.y(), sync_payload.entities.len());
         ev_commands.write(BrokerCommand::SendWorldSync {
             chunk_id,
             world_sync_payload: sync_payload,

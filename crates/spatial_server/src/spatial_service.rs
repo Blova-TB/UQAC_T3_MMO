@@ -179,6 +179,7 @@ impl SpatialService {
         &mut self,
         update_data: PositionUpdate,
     ) -> Option<Vec<(PeerType, Bytes)>> {
+        println!("Received position update for client_id: {:?}, new_pos: {:?}", update_data.client_id, update_data.pos);
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
@@ -316,7 +317,7 @@ impl SpatialService {
         };
 
         current_node.server_occupation = Option::from(update_data.occupancy);
-        println!("Server occupation : {:?}", current_node.server_occupation);
+        // println!("Server occupation : {:?}", current_node.server_occupation);
 
         if update_data.occupancy > self.occupation_to_subdivide {
             if current_node.depth >= current_node.max_depth {

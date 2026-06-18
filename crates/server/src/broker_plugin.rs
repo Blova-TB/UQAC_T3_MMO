@@ -202,6 +202,7 @@ fn send_broker_commands(
                 let _ = broker.peer.send(conn, &stream, publish_packet.to_bytes());
             }
             BrokerCommand::SendPositionUpdate { client_id, pos } => {
+                println!("Envoi d'une mise à jour de position au broker pour le client {} : ({:.2}, {:.2})", client_id.0, pos.x, pos.y);
                 let packet = PositionUpdate {
                     client_id: *client_id,
                     pos: MathVec2::new(pos.x, pos.y),
@@ -251,7 +252,7 @@ fn send_broker_commands(
                         })
                     ),
                 };
-                println!("Envoi d'une demande de mise à jour de position AOI au broker pour le client {} : chunk_id = {}", client_id.0, packet.chunk_id.0);
+                // println!("Envoi d'une demande de mise à jour de position AOI au broker pour le client {} : chunk_id = {}", client_id.0, packet.chunk_id.0);
                 let stream = GameStream::new(0, GameStreamReliability::Unreliable);
 
                 let _ = broker.peer.send(conn, &stream, packet.to_bytes());

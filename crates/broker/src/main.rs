@@ -188,6 +188,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 BrokerHandshakeSpatial::TAG => {
+                    println!("Handshake Spatial reçu, connexion établie avec le Spatial Server !");
                     state.spatial_server_conn = Some(connection);
                     state.spatial_server_stream = Some(stream);
                 }
@@ -199,24 +200,23 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 Subscribe::TAG => {
-                    println!("Subscribe received : ");
+                    // println!("Subscribe received : ");
                     let Some(pkt) = Subscribe::try_from_bytes(data) else { return; };
-                    println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
+                    // println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
                     state.routing_table.subscribe(pkt.custom_id.into(), pkt.topic_id);
                 }
 
                 Unsubscribe::TAG => {
-                    println!("Unsubscribe received : ");
+                    // println!("Unsubscribe received : ");
                     let Some(pkt) = Unsubscribe::try_from_bytes(data) else { return; };
-                    println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
+                    // println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
                     state.routing_table.unsubscribe(pkt.custom_id.into(), pkt.topic_id);
                 }
 
                 Publish::TAG => {
-
-                    println!("Publish received : ");
+                    // println!("Publish received : ");
                     let Some(pkt) = Publish::try_from_bytes(data) else { return; };
-                    println!("topic_id = {}, payload size = {}", pkt.topic_id.0, pkt.payload.len());
+                    // println!("topic_id = {}, payload size = {}", pkt.topic_id.0, pkt.payload.len());
                     let topic_u32: u32 = pkt.topic_id.into();
                     let final_msg = if let Some(&sender_client_id) = state.conn_to_client.get(&connection) {
                         BroadcastClient {
@@ -281,6 +281,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 PositionUpdate::TAG => {
+                    println!("PositionUpdate received");
                     if let Some(s_conn) = &state.spatial_server_conn {
                         let unreliable_stream = GameStream::new(
                             STREAM_PHYSICS,
