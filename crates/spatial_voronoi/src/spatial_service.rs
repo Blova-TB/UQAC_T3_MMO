@@ -184,32 +184,23 @@ impl SpatialService {
 
         let current_shard = self.voronoi.get_player_shard(client_id)?;
 
-        if let Some(optimal_shard) = self.voronoi.check_single_handoff(client_id) {
-            
-            let last_handoff = self.client_to_shards
-                .get(&client_id)
-                .map(|(_, time)| *time)
-                .unwrap_or_else(|| Instant::now() - std::time::Duration::from_secs(100)); // bypass au premier spawn
-            
-            if last_handoff.elapsed() > std::time::Duration::from_secs_f32(self.hysteresis_time) {
+        if !self.client_waiting_for_crossing.contains_key(&client_id) { // 🛡️ AJOUT ICI
+            if let Some(optimal_shard) = self.voronoi.check_single_handoff(client_id) {
+                let last_handoff = self.client_to_shards
+                    .get(&client_id)
+                    .map(|(_, time)| *time)
+                    .unwrap_or_else(|| std::time::Instant::now() - std::time::Duration::from_secs(100));
 
-                println!(
-                    "CROSSING ALERT : Joueur {:?} a changé de shard ({:?} -> {:?})",
-                    client_id, current_shard, optimal_shard
-                );
-                
-                self.voronoi.update_player_shard(client_id, optimal_shard);
-                
-                self.client_to_shards.insert(client_id, (optimal_shard, Instant::now()));
+                if last_handoff.elapsed() > std::time::Duration::from_secs_f32(self.hysteresis_time) {
+                    println!(
+                        "CROSSING ALERT : Joueur {:?} a demandé à changer de shard ({:?} -> {:?})",
+                        client_id, current_shard, optimal_shard
+                    );
 
-                outgoing_packets.append(
-                    self.apply_client_cross(
-                        client_id,
-                        current_shard,
-                        optimal_shard,
-                        new_pos
-                    ).as_mut()
-                );
+                    outgoing_packets.append(
+                        self.apply_client_cross(client_id, current_shard, optimal_shard, new_pos).as_mut()
+                    );
+                }
             }
         }
         
@@ -267,6 +258,10 @@ impl SpatialService {
                 };
 
                 outgoing_packets.push((PeerType::Broker, handoff_complete.to_bytes()));
+
+                self.voronoi.update_player_shard(client_id, shard_id);
+                self.client_to_shards.insert(client_id, (shard_id, Instant::now()));
+
                 return Some(outgoing_packets);
             }
         }
@@ -318,7 +313,6 @@ impl SpatialService {
         new_pos: Vec2<f32>,
     ) -> Vec<(PeerType, Bytes)> {
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
-
         self.client_waiting_for_crossing.remove(&client_id);
 
         let mut already_ghost = false;
@@ -339,15 +333,15 @@ impl SpatialService {
                 pos: new_pos,
             };
             outgoing_packets.push((PeerType::Broker, handoff_complete.to_bytes()));
+            self.voronoi.update_player_shard(client_id, new_shard_id);
+            self.client_to_shards.insert(client_id, (new_shard_id, Instant::now()));
         } else {
             self.client_waiting_for_crossing.insert(client_id, (old_shard_id, new_shard_id));
-            
             outgoing_packets.push(fast_handoff_req(client_id, new_shard_id));
+
+            self.client_to_shards.insert(client_id, (old_shard_id, Instant::now()));
         }
-        
-        self.voronoi.update_player_shard(client_id, new_shard_id);
-        self.client_to_shards.insert(client_id, (new_shard_id, Instant::now()));
-        
+
         let mut ghosts = self.voronoi.get_player_ghost_shards(client_id).unwrap_or_default();
         if !ghosts.contains(&new_shard_id) {
             ghosts.push(new_shard_id);
@@ -367,6 +361,9 @@ impl SpatialService {
                         let packet = SpawnServer { shard_id: new_shard.into() };
                         outgoing_packets.push((PeerType::Orchestrator, packet.to_bytes()));
                     }
+                }
+                VoronoiEvent::TopologyCommitted(update) => {
+                    self.process_topology_commit(&update, &mut outgoing_packets);
                 }
             }
         }

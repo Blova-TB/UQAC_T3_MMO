@@ -6,7 +6,7 @@ use docker::DockerOrchestrator;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 use futures::StreamExt;
 
@@ -60,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut autoscale_timer = tokio::time::interval(Duration::from_secs(1));
     let mut active_sessions: HashMap<Uuid, String> = HashMap::new();
     let mut server_streams: HashMap<Uuid, GameStream> = HashMap::new();
+    let mut pending_shards: VecDeque<u32> = VecDeque::new();
 
     let mut conn = database.conn.clone();
     let _: () = redis::cmd("CONFIG").arg("SET").arg("notify-keyspace-events").arg("Ex").query_async(&mut conn).await?;
@@ -100,12 +101,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let available_count = servers.iter().filter(|s| {
                         (s.status == Status::Waiting || s.status == Status::Starting)
                         && s.players_online < s.max_players
+                        && s.shard_id.is_none()
                     }).count();
 
-                    if available_count < min_available_servers {
-                        let to_spawn = min_available_servers - available_count;
-                        println!("⚖️ [Auto-Scaler] {}/{} dispos. Spawn de {} instance(s)...", available_count, min_available_servers, to_spawn);
+                    let target_servers = min_available_servers + pending_shards.len();
 
+                    if available_count < target_servers {
+                        let to_spawn = target_servers - available_count;
+                        println!("⚖️ [Auto-Scaler] Besoin de {} dispo ({} actuel). Spawn de {} instance(s)...", target_servers, available_count, to_spawn);
                         for _ in 0..to_spawn {
                             let server_id = Uuid::new_v4().to_string();
                             let docker_clone = docker_manager.clone();
@@ -131,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
-                    else if available_count > min_available_servers {
+                    else if available_count > min_available_servers && pending_shards.is_empty() {
                         let to_kill = available_count - min_available_servers;
                         let empty_servers: Vec<_> = servers.iter().filter(|s| s.status == Status::Empty && s.players_online == 0).collect();
                         let kill_count = std::cmp::min(to_kill, empty_servers.len());
@@ -175,12 +178,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                         if let Ok(servers) = database.get_all_servers().await {
                                             if let Some(existing) = servers.iter().find(|s| s.server_id == payload.id) {
+
+                                                let mut current_status = payload.status;
+                                                let mut current_shard = existing.shard_id;
+
+                                                // 🚀 NOUVEAU : Traitement immédiat de la file d'attente
+                                                if current_status == Status::Waiting && current_shard.is_none() && !pending_shards.is_empty() {
+                                                    if let Some(out_stream) = server_streams.get(&connection.connection_id) {
+                                                        if let Some(pending_shard_id) = pending_shards.pop_front() {
+
+                                                            let assign_packet = AssignShard { shard_id: CustomId::from(pending_shard_id) };
+                                                            let target_conn = GameConnection { connection_id: connection.connection_id };
+
+                                                            if orchestrator_peer.send(&target_conn, out_stream, assign_packet.to_bytes()).is_ok() {
+                                                                println!("🎯 [Orchestrator] Shard {} assignée DEPUIS LA FILE au conteneur {}", pending_shard_id, payload.id);
+                                                                current_status = Status::Online;
+                                                                current_shard = Some(pending_shard_id);
+                                                            } else {
+                                                                // En cas d'erreur réseau, on remet la shard au DÉBUT de la file pour ne pas la perdre
+                                                                pending_shards.push_front(pending_shard_id);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Sauvegarde de l'état (mis à jour si une Shard a été assignée)
                                                 let updated_info = ServerInfo {
                                                     server_id: payload.id,
-                                                    shard_id: existing.shard_id, // On conserve le ShardId s'il en a déjà un
+                                                    shard_id: current_shard,
                                                     players_online: payload.player_count,
                                                     max_players: payload.max_players,
-                                                    status: payload.status,
+                                                    status: current_status,
                                                 };
                                                 let _ = database.save_server(&updated_info).await;
                                             }
@@ -232,7 +260,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     }
                                                 }
                                             } else {
-                                                todo!("Gérer pas assez de servers dans le pool")
+                                                println!("⏳ [Orchestrator] Aucun serveur dispo, mise en file d'attente pour la Shard : {}", shard_raw_id);
+                                                pending_shards.push_back(shard_raw_id);
                                             }
                                         }
                                     }

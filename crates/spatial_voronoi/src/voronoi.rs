@@ -90,6 +90,7 @@ pub struct PendingOp {
 
 pub enum VoronoiEvent {
     SpawnRequests(Vec<ShardId>),
+    TopologyCommitted(TopologyUpdate),
 }
 
 pub struct TopologyUpdate {
@@ -212,9 +213,12 @@ impl Voronoi {
 
     fn update_dynamics(&mut self) -> Option<VoronoiEvent> {
         let mut metrics: FxHashMap<ShardId, ShardMetrics> = FxHashMap::default();
-
         for (_, player) in self.players.iter() {
-            let m = metrics.entry(player.current_shard).or_insert(ShardMetrics { count: 0, min_bound: Point2D { x: f32::MAX, y: f32::MAX }, max_bound: Point2D { x: f32::MIN, y: f32::MIN }});
+            let m = metrics.entry(player.current_shard).or_insert(ShardMetrics {
+                count: 0,
+                min_bound: Point2D { x: f32::MAX, y: f32::MAX },
+                max_bound: Point2D { x: f32::MIN, y: f32::MIN }
+            });
             m.count += 1;
             m.min_bound.x = m.min_bound.x.min(player.pos.x);
             m.min_bound.y = m.min_bound.y.min(player.pos.y);
@@ -222,71 +226,107 @@ impl Voronoi {
             m.max_bound.y = m.max_bound.y.max(player.pos.y);
         }
 
-        let mut to_remove = Vec::new();
-        let mut new_spawns = Vec::new();
-
         let is_pending = |id: ShardId| self.pending_ops.iter().any(|op| op.to_remove.contains(&id));
 
-        // Split
+        // -----------------------------------------------------------
+        // 1. FERMETURE STRICTE DES SERVEURS VIDES (0% Occupancy)
+        // -----------------------------------------------------------
+
+        // Étape A : On compte combien de serveurs sont actuellement ACTIFS (> 0 joueurs)
+        let mut active_shards_count = 0;
+        for &key in self.shards.keys() {
+            let occ = self.shard_occupancies.get(&key).copied().unwrap_or(0);
+            if occ > 0 {
+                active_shards_count += 1;
+            }
+        }
+
+        // Étape B : On liste tous les serveurs à 0% prêts à être détruits
+        let mut culled_shards = Vec::new();
         for (&key, shard) in self.shards.iter() {
-            if is_pending(key) { continue; } // On ignore les shards déjà en transition !
+            if is_pending(key) || key == ShardId::ROOT { continue; }
 
-            let current_occupancy = self.shard_occupancies.get(&key).copied().unwrap_or(0);
-            if let Some(m) = metrics.get(&key) {
-                if current_occupancy >= self.config.split_occupancy_threshold && self.current_tick >= shard.spawn_tick + self.config.min_age_ticks {
-                    to_remove.push(key);
-                    let spread_x = m.max_bound.x - m.min_bound.x;
-                    let spread_y = m.max_bound.y - m.min_bound.y;
-                    let (p1, p2) = if spread_x > spread_y {
-                        (Point2D { x: m.min_bound.x, y: shard.pos.y }, Point2D { x: m.max_bound.x, y: shard.pos.y })
-                    } else {
-                        (Point2D { x: shard.pos.x, y: m.min_bound.y }, Point2D { x: shard.pos.x, y: m.max_bound.y })
-                    };
-                    new_spawns.push(p1);
-                    new_spawns.push(p2);
-                }
+            let reported_occupancy = self.shard_occupancies.get(&key).copied().unwrap_or(0);
+
+            if reported_occupancy == 0 && self.current_tick >= shard.spawn_tick + self.config.min_age_ticks {
+                culled_shards.push(key);
             }
         }
 
-        // Merge
-        if to_remove.is_empty() {
-            let shards_vec: Vec<_> = self.shards.iter().collect();
-            let mut best_pair = None;
-            let mut min_dist_sq = f32::MAX;
+        // Étape C : Le Filet de Sécurité 🛡️
+        let has_root = self.shards.contains_key(&ShardId::ROOT);
 
-            for i in 0..shards_vec.len() {
-                let (&k1, s1) = shards_vec[i];
-                if is_pending(k1) { continue; }
+        // Si TOUT LE MONDE est parti (0 serveur actif) ET que le ROOT n'existe plus,
+        // on sauve in extremis l'une des shards vides pour qu'elle serve de point d'entrée.
+        if active_shards_count == 0 && !has_root && !culled_shards.is_empty() {
+            let _survivor = culled_shards.pop().unwrap(); // On retire le dernier condamné de la liste
+            println!("[VORONOI] 🛡️ Shard {:?} est la dernière, elle est sauvée !", _survivor);
+        }
 
-                for j in (i+1)..shards_vec.len() {
-                    let (&k2, s2) = shards_vec[j];
-                    if is_pending(k2) { continue; }
+        // Étape D : Exécution de la fermeture
+        if !culled_shards.is_empty() {
+            let mut update = TopologyUpdate {
+                spawned_shards: Vec::new(),
+                despawned_shards: culled_shards.clone(),
+                forced_handoffs: Vec::new(),
+            };
 
-                    if self.current_tick < s1.spawn_tick + self.config.min_age_ticks || self.current_tick < s2.spawn_tick + self.config.min_age_ticks {
-                        continue;
-                    }
-
-                    let occ1 = self.shard_occupancies.get(&k1).copied().unwrap_or(0);
-                    let occ2 = self.shard_occupancies.get(&k2).copied().unwrap_or(0);
-                    let combined_occupancy = occ1.saturating_add(occ2);
-
-                    if combined_occupancy <= self.config.merge_occupancy_threshold {
-                        let dist_sq = s1.pos.distance_sq(&s2.pos);
-                        if dist_sq < min_dist_sq && dist_sq < self.config.max_merge_dist_sq {
-                            min_dist_sq = dist_sq;
-                            best_pair = Some((k1, k2, s1.pos, s2.pos));
-                        }
-                    }
-                }
+            for key in culled_shards {
+                self.shards.remove(&key);
+                self.shard_occupancies.remove(&key);
+                self.id_generator.free(key);
             }
 
-            if let Some((k1, k2, p1, p2)) = best_pair {
-                to_remove.push(k1);
-                to_remove.push(k2);
-                new_spawns.push(Point2D { x: (p1.x + p2.x)/2.0, y: (p1.y + p2.y)/2.0 });
+            println!("[VORONOI] 🛑 Fermeture définitive des serveurs vides : {:?}", update.despawned_shards);
+            return Some(VoronoiEvent::TopologyCommitted(update));
+        }
+
+        // -----------------------------------------------------------
+        // 2. SPLITS AUTORITAIRES (Basé sur la charge Serveur)
+        // -----------------------------------------------------------
+        let mut to_remove = Vec::new();
+        let mut new_spawns = Vec::new();
+        let default_spread = 500.0;
+
+        for (&key, shard) in self.shards.iter() {
+            if is_pending(key) { continue; }
+
+            let reported_occupancy = self.shard_occupancies.get(&key).copied().unwrap_or(0);
+
+            // On split parce que LE SERVEUR le demande (occupancy >= threshold)
+            if reported_occupancy >= self.config.split_occupancy_threshold {
+                to_remove.push(key);
+
+                // On essaie d'utiliser la géométrie connue pour diviser intelligemment
+                // Si Voronoï est aveugle (metrics absent), on utilise une boîte de secours (default_spread)
+                let m = metrics.get(&key).copied().unwrap_or(ShardMetrics {
+                    count: reported_occupancy as u32,
+                    min_bound: Point2D { x: shard.pos.x - default_spread, y: shard.pos.y - default_spread },
+                    max_bound: Point2D { x: shard.pos.x + default_spread, y: shard.pos.y + default_spread }
+                });
+
+                let mut spread_x = m.max_bound.x - m.min_bound.x;
+                let mut spread_y = m.max_bound.y - m.min_bound.y;
+
+                // Failsafe : Singularité si tous les joueurs sont empilés
+                if spread_x < 1.0 && spread_y < 1.0 {
+                    spread_x = default_spread * 2.0;
+                    spread_y = default_spread * 2.0;
+                }
+
+                let (p1, p2) = if spread_x > spread_y {
+                    (Point2D { x: m.min_bound.x, y: shard.pos.y }, Point2D { x: m.max_bound.x, y: shard.pos.y })
+                } else {
+                    (Point2D { x: shard.pos.x, y: m.min_bound.y }, Point2D { x: shard.pos.x, y: m.max_bound.y })
+                };
+                new_spawns.push(p1);
+                new_spawns.push(p2);
             }
         }
 
+        // -----------------------------------------------------------
+        // 3. ENVOI DES REQUÊTES DE SPLIT
+        // -----------------------------------------------------------
         if to_remove.is_empty() { return None; }
 
         let mut to_spawn = Vec::new();
@@ -300,7 +340,7 @@ impl Voronoi {
 
         self.pending_ops.push(PendingOp { to_remove, to_spawn });
 
-        println!("[VORONOI] Opération topologique mise en attente. Demande de Spawn : {:?}", requests);
+        println!("[VORONOI] ⚙️ Division ordonnée par les serveurs. Demande de Spawn : {:?}", requests);
         Some(VoronoiEvent::SpawnRequests(requests))
     }
 
