@@ -59,7 +59,7 @@ fn make_server_config() -> (quinn::ServerConfig, Vec<u8>) {
     transport_config.congestion_controller_factory(Arc::new(bbr_config));
 
     // Disable Datagram Pacing (Critical for "Unreliable" lane)
-    transport_config.datagram_send_buffer_size(0); // 0 means "send immediately or drop" for some impls, but larger buffer with BBR is safer.
+    transport_config.datagram_send_buffer_size(1024 * 1024); // 0 means "send immediately or drop" for some impls, but larger buffer with BBR is safer.
 
     // Boost Timers for fast "Lost Packet" detection
     // Default initial RTT is 333ms. Set it to a realistic gaming value (e.g., 15ms).
@@ -86,7 +86,7 @@ fn make_client_config() -> quinn::ClientConfig {
 
     let bbr_config = BbrConfig::default();
     transport_config.congestion_controller_factory(Arc::new(bbr_config));
-    transport_config.datagram_send_buffer_size(0);
+    transport_config.datagram_send_buffer_size(1024 * 1024);
     transport_config.initial_rtt(Duration::from_millis(15));
     transport_config.keep_alive_interval(Some(Duration::from_secs(1)));
 

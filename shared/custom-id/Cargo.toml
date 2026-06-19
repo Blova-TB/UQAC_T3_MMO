@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+mmo-math-tools = { path = "../../shared/mmo-math-tools" }
+
 bitcode = "0.6.9"
 serde = { version = "1.0.228", features = ["derive"] }
+mathtools = { workspace = true }

@@ -31,6 +31,9 @@ struct BrokerState {
     spatial_server_conn: Option<GameConnection>,
     spatial_server_stream: Option<GameStream>,
 
+    aoi_server_conn: Option<GameConnection>,
+    aoi_server_stream: Option<GameStream>,
+
     shard_conns: AHashMap<u32, GameConnection>,
     shard_streams: AHashMap<u32, GameStream>,
 }
@@ -44,6 +47,8 @@ impl Default for BrokerState {
             routing_table: OptimizedRoutingTable::default(),
             spatial_server_conn: None,
             spatial_server_stream: None,
+            aoi_server_conn: None,
+            aoi_server_stream: None,
             shard_conns: AHashMap::new(),
             shard_streams: AHashMap::new(),
         }
@@ -78,6 +83,13 @@ impl BrokerState {
             self.spatial_server_conn = None;
             self.spatial_server_stream = None;
             warn!("🗺️ Spatial Server déconnecté !");
+            return;
+        }
+
+        if self.aoi_server_conn.as_ref() == Some(&conn) {
+            self.aoi_server_conn = None;
+            self.aoi_server_stream = None;
+            warn!("👁️ AOI Server déconnecté !");
             return;
         }
 
@@ -176,22 +188,35 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                 }
 
                 BrokerHandshakeSpatial::TAG => {
+                    println!("Handshake Spatial reçu, connexion établie avec le Spatial Server !");
                     state.spatial_server_conn = Some(connection);
                     state.spatial_server_stream = Some(stream);
                 }
 
+                BrokerHandshakeAoi::TAG => {
+                    println!("Handshake AOI reçu, connexion établie avec l'AOI Server !");
+                    state.aoi_server_conn = Some(connection);
+                    state.aoi_server_stream = Some(stream);
+                }
+
                 Subscribe::TAG => {
+                    // println!("Subscribe received : ");
                     let Some(pkt) = Subscribe::try_from_bytes(data) else { return; };
+                    // println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
                     state.routing_table.subscribe(pkt.custom_id.into(), pkt.topic_id);
                 }
 
                 Unsubscribe::TAG => {
+                    // println!("Unsubscribe received : ");
                     let Some(pkt) = Unsubscribe::try_from_bytes(data) else { return; };
+                    // println!("custom_id = {}, topic_id = {}", pkt.custom_id.0, pkt.topic_id);
                     state.routing_table.unsubscribe(pkt.custom_id.into(), pkt.topic_id);
                 }
 
                 Publish::TAG => {
+                    // println!("Publish received : ");
                     let Some(pkt) = Publish::try_from_bytes(data) else { return; };
+                    // println!("topic_id = {}, payload size = {}", pkt.topic_id.0, pkt.payload.len());
                     let topic_u32: u32 = pkt.topic_id.into();
                     let final_msg = if let Some(&sender_client_id) = state.conn_to_client.get(&connection) {
                         BroadcastClient {
@@ -220,7 +245,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     let shard_id: u32 = pkt.shard_id.into();
                     let client_id: u32 = pkt.client_id.into();
 
-                    state.routing_table.subscribe(client_id, shard_id);
+                    // state.routing_table.subscribe(client_id, shard_id);
                     state.routing_table.subscribe(shard_id, client_id);
 
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
@@ -233,7 +258,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     let shard_id: u32 = pkt.shard_id.into();
                     let client_id: u32 = pkt.client_id.into();
 
-                    state.routing_table.unsubscribe(client_id, shard_id);
+                    // state.routing_table.unsubscribe(client_id, shard_id);
                     state.routing_table.unsubscribe(shard_id, client_id);
 
                     if let Some(conn) = state.shard_conns.get(&shard_id) {
@@ -349,7 +374,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         let _ = peer.send(conn, state.shard_streams.get(&new_shard_id).unwrap(), take_pkt);
                     }
 
-                    state.routing_table.subscribe(pkt.entity_id.into(), new_shard_id);
+                    //state.routing_table.subscribe(pkt.entity_id.into(), new_shard_id);
 
                     if let Some(conn) = state.shard_conns.get(&old_shard_id) {
                         let drop_pkt = DropAuthority {
@@ -358,7 +383,7 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                         let _ = peer.send(conn, state.shard_streams.get(&old_shard_id).unwrap(), drop_pkt);
                     }
 
-                    state.routing_table.unsubscribe(pkt.entity_id.into(), old_shard_id);
+                    //state.routing_table.unsubscribe(pkt.entity_id.into(), old_shard_id);
                 }
 
                 ShutdownServerOnEmpty::TAG => {
@@ -369,7 +394,29 @@ fn handle_network_event(state: &mut BrokerState, event: GameNetworkEvent, peer: 
                     }
                     println!("Shutdown server on empty")
                 }
-                _ => warn!("Tag non reconnu : 0x{:02X}", tag),
+
+                AoiPosUpdate::TAG => {
+                    if let Some(aoi_conn) = &state.aoi_server_conn {
+                        let unreliable_stream = GameStream::new(
+                            STREAM_PHYSICS,
+                            GameStreamReliability::Unreliable
+                        );
+                        let _ = peer.send(aoi_conn, &unreliable_stream, data);
+                    } else {
+                        warn!("⚠️ PositionUpdate ignoré : Aoi Server non connecté.");
+                    }
+                }
+
+                AoiModeChange::TAG => {
+                    if let (Some(aoi_conn), Some(aoi_stream)) = (&state.aoi_server_conn, &state.aoi_server_stream) {
+                        let _ = peer.send(aoi_conn, aoi_stream, data);
+                    }
+                }
+
+                _ => {
+                    println!("Message reçu avec tag inconnu : 0x{:02X}", tag);
+                    warn!("Tag non reconnu : 0x{:02X}", tag)
+                },
             }
         }
         _ => {}

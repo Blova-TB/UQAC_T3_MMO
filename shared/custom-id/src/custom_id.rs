@@ -8,7 +8,7 @@ pub enum IdType {
     Client = 0,
     Server = 1,
     Entity = 2,
-    Ghost = 3,
+    Chunk = 3,
 }
 
 impl TryFrom<u8> for IdType {
@@ -20,7 +20,7 @@ impl TryFrom<u8> for IdType {
             0 => Ok(Self::Client),
             1 => Ok(Self::Server),
             2 => Ok(Self::Entity),
-            3 => Ok(Self::Ghost),
+            3 => Ok(Self::Chunk),
             _ => Err("Type d'ID inconnu"),
         }
     }
@@ -82,7 +82,7 @@ impl fmt::Debug for CustomId {
             IdType::Client => "Client",
             IdType::Server => "Server",
             IdType::Entity => "Entity",
-            IdType::Ghost => "Ghost",
+            IdType::Chunk => "Chunk",
         });
         write!(f, "CustomId({}:{})", type_str, self.value())
     }

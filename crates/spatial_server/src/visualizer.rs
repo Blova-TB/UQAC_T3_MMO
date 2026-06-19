@@ -1,6 +1,9 @@
 ﻿// visualizer.rs
-use crate::quad_tree::{QuadTree, Rect};
+use crate::quad_tree::{QuadTree};
 use serde::Serialize;
+
+use mmo_math_tools::rect::Rect;
+
 
 // --- Modèles pour le Frontend (JSON) ---
 

@@ -1,12 +1,13 @@
 ﻿use std::time::Instant;
-use crate::client_id::ClientId;
 use crate::network::PeerType;
-use crate::quad_tree::{QuadTree, Rect};
-use crate::shard_id::{Quadrant, ShardId};
+use crate::quad_tree::{QuadTree};
 use ahash::{AHashMap, AHashSet};
 use bytes::Bytes;
 use mathtools::Vec2;
 
+use custom_id::client_id::ClientId;
+use custom_id::shard_id::{Quadrant, ShardId};
+use mmo_math_tools::rect::Rect;
 use internal_communication_protocol::internal_models::*;
 
 pub struct SpatialService {
@@ -178,6 +179,7 @@ impl SpatialService {
         &mut self,
         update_data: PositionUpdate,
     ) -> Option<Vec<(PeerType, Bytes)>> {
+        println!("Received position update for client_id: {:?}, new_pos: {:?}", update_data.client_id, update_data.pos);
         let mut outgoing_packets: Vec<(PeerType, Bytes)> = Vec::new();
 
         let client_id = ClientId::try_from(update_data.client_id).ok()?;
@@ -315,7 +317,7 @@ impl SpatialService {
         };
 
         current_node.server_occupation = Option::from(update_data.occupancy);
-        println!("Server occupation : {:?}", current_node.server_occupation);
+        // println!("Server occupation : {:?}", current_node.server_occupation);
 
         if update_data.occupancy > self.occupation_to_subdivide {
             if current_node.depth >= current_node.max_depth {

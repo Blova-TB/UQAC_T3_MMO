@@ -97,6 +97,7 @@ fn handle_ingame_network(
                             GameMessage::decode(stream.stream_id, &pkt.payload)
                         {
                             if let GameMessage::WorldSync(sync_data) = game_message {
+                                println!("📡 Snapshot reçu du Broker : {} entités", sync_data.entities.len());
                                 ev_snapshot.write(NetworkSnapshotEvent {
                                     players: sync_data.entities,
                                 });

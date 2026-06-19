@@ -1,8 +1,8 @@
 ﻿use std::fmt;
 use mathtools::Vec2;
-use crate::quad_tree::Rect;
+use mmo_math_tools::rect::Rect;
 
-use custom_id::custom_id::{CustomId, IdType};
+use crate::custom_id::{CustomId, IdType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Quadrant {
