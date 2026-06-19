@@ -11,6 +11,7 @@ client-communication-protocol = { path = "../../shared/client-communication-prot
 internal-communication-protocol = { path = "../../shared/internal-communication-protocol" }
 network-protocol = { path = "../../shared/network-protocol" }
 custom-id = { path = "../../shared/custom-id" }
+aoi-model = { path = "../../shared/aoi-model" }
 
 bytes = { workspace = true }
 serde = { workspace = true }
@@ -19,5 +20,6 @@ serde_json = { workspace = true }
 rand = { workspace = true }
 mathtools = { workspace = true }
 bevy = { workspace = true, features = ["bevy_log", "debug", "bevy_state"] }
+ahash = { workspace = true }
 
 avian2d = "0.6.1"

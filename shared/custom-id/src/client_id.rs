@@ -1,10 +1,10 @@
 ﻿use std::fmt;
 
-use custom_id::custom_id::{CustomId, IdType};
+use crate::custom_id::{CustomId, IdType};
 
 /// ClientId encapsule un CustomId garanti d'être de type IdType::Client
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ClientId(CustomId);
+pub struct ClientId(pub CustomId);
 
 impl ClientId {
     /// Création sécurisée d'un nouveau ClientId

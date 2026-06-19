@@ -1,8 +1,6 @@
 mod quad_tree;
-mod shard_id;
 mod network;
 mod spatial_service;
-mod client_id;
 mod visualizer;
 
 use bytes::Bytes;
@@ -10,14 +8,14 @@ use std::time::{Duration, Instant};
 use std::{env, io, thread};
 use std::io::Write;
 use mathtools::Vec2;
-use quad_tree::Rect;
-use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
-use spatial_service::SpatialService;
-use crate::shard_id::ShardId;
 use std::net::ToSocketAddrs;
 use std::sync::{Arc, RwLock};
+use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
+use spatial_service::SpatialService;
 
-use internal_communication_protocol::internal_models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
+use mmo_math_tools::rect::Rect;
+use custom_id::shard_id::ShardId;
+use internal_communication_protocol::internal_models::{CustomServerPacket, ServerBinaryPacket, SpawnServer};
 
 fn main() {
     println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");

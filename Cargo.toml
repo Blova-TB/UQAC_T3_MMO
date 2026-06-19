@@ -9,7 +9,16 @@ members = [
     "shared/network-protocol",
     "shared/internal-communication-protocol",
     "shared/client-communication-protocol",
-    "shared/web-communication-protocol", "shared/custom-id", "crates/spatial_voronoi", "crates/bot_swarm", "crates/tools"]
+    "shared/web-communication-protocol",
+    "shared/custom-id",
+    "shared/mmo-math-tools",
+    "crates/aoi_server",
+    "shared/aoi-model",
+    "crates/spatial_voronoi",
+    "crates/bot_swarm",
+    "crates/tools",
+]
+
 resolver = "2"
 
 [workspace.dependencies]
