@@ -1,5 +1,4 @@
 ﻿use std::time::Instant;
-use crate::client_id::ClientId;
 use crate::network::PeerType;
 use crate::voronoi::{Voronoi, VoronoiEvent};
 use crate::shard_id::{ShardId};
@@ -8,6 +7,7 @@ use bytes::Bytes;
 use mathtools::Vec2;
 
 use internal_communication_protocol::internal_models::*;
+use custom_id::client_id::ClientId;
 use crate::shared::Point2D;
 
 pub struct SpatialService {

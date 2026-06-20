@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
 use crate::shard_id::{ShardId, ShardIdGenerator};
-use crate::client_id::ClientId;
+use custom_id::client_id::ClientId;
 use crate::shared::{Point2D, Player, Shard, AABB};
 
 #[derive(Serialize)]

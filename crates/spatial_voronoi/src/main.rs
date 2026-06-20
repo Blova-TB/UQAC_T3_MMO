@@ -3,7 +3,6 @@ mod voronoi;
 mod shared;
 mod shard_id;
 mod spatial_service;
-mod client_id;
 
 use bytes::Bytes;
 use std::time::{Duration, Instant};
