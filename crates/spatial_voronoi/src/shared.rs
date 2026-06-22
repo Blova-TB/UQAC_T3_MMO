@@ -1,5 +1,4 @@
-﻿use slotmap::new_key_type;
-use crate::shard_id::ShardId;
+﻿use crate::shard_id::ShardId;
 use mathtools::Vec2;
 
 // ============================================================================
@@ -64,15 +63,6 @@ impl AABB {
     pub fn contains(&self, p: &Point2D) -> bool {
         p.x >= self.min_x && p.x <= self.max_x && p.y >= self.min_y && p.y <= self.max_y
     }
-}
-
-// ============================================================================
-// 2. IDENTIFIANTS UNIQUES (ECS & SLOTMAP)
-// ============================================================================
-
-// Génération de clés fortement typées pour éviter de mélanger un ID de joueur avec un ID de Shard.
-new_key_type! {
-    pub struct PlayerKey;
 }
 
 // ============================================================================

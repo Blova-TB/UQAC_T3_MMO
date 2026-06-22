@@ -1,7 +1,7 @@
 ﻿use std::fmt;
 use custom_id::custom_id::{CustomId, IdType};
 use rustc_hash::FxHashSet;
-use rand::Rng;
+use rand::RngExt;
 
 // ============================================================================
 // 1. DÉFINITION DU SHARD ID
@@ -50,11 +50,11 @@ impl ShardIdGenerator {
 
     /// Génère un nouveau ShardId aléatoire garanti unique.
     pub fn generate(&mut self) -> ShardId {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         loop {
             // On se limite à l'espace de 28 bits (0x0FFFFFFF) alloué par CustomId
-            let val = rng.gen_range(1..=0x0FFF_FFFF);
+            let val = rng.random_range(1..=0x0FFF_FFFF);
 
             // `insert` renvoie true si la valeur n'était pas présente
             if self.used_ids.insert(val) {
