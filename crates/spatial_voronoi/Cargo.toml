@@ -1,0 +1,20 @@
+[package]
+name = "spatial_voronoi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+internal-communication-protocol = { path = "../../shared/internal-communication-protocol" }
+network-protocol = { path = "../../shared/network-protocol" }
+custom-id = { path = "../../shared/custom-id" }
+
+spade = "2.15.1"
+rustc-hash = "1.1.0"
+tiny_http = "0.12.0"
+
+mathtools = { workspace = true }
+bytes = { workspace = true }
+ahash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }

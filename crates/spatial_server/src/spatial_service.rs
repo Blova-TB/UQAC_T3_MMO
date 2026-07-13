@@ -457,8 +457,6 @@ impl SpatialService {
             let Rect { min, max } = quads.get_bound_from_parent(current_bounds);
             let spawn_server = SpawnServer {
                 shard_id: shard_id.new_id_for_child(quads).into(),
-                pos_max: max,
-                pos_min: min,
             };
 
             outgoing_packets.push((PeerType::Orchestrator, spawn_server.to_bytes()));
@@ -574,8 +572,6 @@ impl SpatialService {
 
         let spawn_server = SpawnServer {
             shard_id: shard_id.into(),
-            pos_max: current_node.bounds.max,
-            pos_min: current_node.bounds.min,
         };
 
         outgoing_packets.push((PeerType::Orchestrator, spawn_server.to_bytes()));

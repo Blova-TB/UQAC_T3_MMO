@@ -14,7 +14,11 @@ members = [
     "shared/mmo-math-tools",
     "crates/aoi_server",
     "shared/aoi-model",
+    "crates/spatial_voronoi",
+    "crates/bot_swarm",
+    "crates/tools",
 ]
+
 resolver = "2"
 
 [workspace.dependencies]

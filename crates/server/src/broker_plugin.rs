@@ -116,6 +116,7 @@ fn poll_broker(
                                 {
                                     match game_message {
                                         GameMessage::Input(input_payload) => {
+                                            println!("Input player : {:?}", input_payload);
                                             ev_broker.write(BrokerEvent::PlayerInput {
                                                 client_id: pkt.client_id,
                                                 payload: input_payload,

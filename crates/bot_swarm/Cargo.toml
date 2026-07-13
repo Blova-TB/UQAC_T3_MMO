@@ -1,0 +1,21 @@
+[package]
+name = "bot_swarm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Tes crates internes (ajuste les chemins selon ton architecture)
+client-communication-protocol = { path = "../../shared/client-communication-protocol" }
+internal-communication-protocol = { path = "../../shared/internal-communication-protocol" }
+network-protocol = { path = "../../shared/network-protocol" }
+web-communication-protocol = { path = "../../shared/web-communication-protocol" }
+custom-id = { path = "../../shared/custom-id" }
+
+# Utilitaires asynchrones et réseau
+tokio = { version = "1.36", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+serde_json = "1.0"
+base64 = "0.21"
+bitcode = "0.6"
+rand = "0.8"
+time = "0.3.49"

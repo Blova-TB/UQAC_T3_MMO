@@ -1,35 +1,31 @@
-mod quad_tree;
 mod network;
+mod voronoi;
+mod shared;
+mod shard_id;
 mod spatial_service;
-mod visualizer;
 
 use bytes::Bytes;
 use std::time::{Duration, Instant};
 use std::{env, io, thread};
 use std::io::Write;
-use mathtools::Vec2;
 use std::net::ToSocketAddrs;
 use std::sync::{Arc, RwLock};
-use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
-use spatial_service::SpatialService;
 
-use mmo_math_tools::rect::Rect;
-use custom_id::shard_id::ShardId;
-use internal_communication_protocol::internal_models::{CustomServerPacket, ServerBinaryPacket, SpawnServer};
+use network::{InfrastructureEvent, InfrastructureNetwork, PeerType};
+use internal_communication_protocol::internal_models::{CustomServerPacket, SpawnServer, ServerBinaryPacket};
+use crate::shard_id::{ShardId};
+use crate::spatial_service::SpatialService;
 
 fn main() {
-    println!("Hello, world! I'm the SpatialServer. And I would like to ask you : comment tu t'appèèèlles ?");
+    println!("VORONOOOOOOOOIIIIIIII");
     let mut spatial_service = SpatialService::new(
-        Rect {
-            min: Vec2::new(0.0, 0.0),
-            max: Vec2::new(100000.0, 100000.0)
-        },
-        5,
         1000.0,
         70,
         50,
         15.0,
         1.5,
+        100000.0,
+        100000.0
     );
 
     let orchestrator_addr = env::var("ORCHESTRATOR_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -71,22 +67,6 @@ fn main() {
 
     let target_tick_duration = Duration::from_secs_f64(1.0 / 60.0);
 
-    let shared_state = Arc::new(RwLock::new(String::from("{}")));
-
-    let viz_state = shared_state.clone();
-    thread::spawn(move || {
-        let server = tiny_http::Server::http("0.0.0.0:8080").unwrap();
-        for request in server.incoming_requests() {
-            let state = viz_state.read().unwrap();
-
-            let response = tiny_http::Response::from_string(state.clone())
-                .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
-                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-
-            let _ = request.respond(response);
-        }
-    });
-
     // 🚩 Drapeau pour s'assurer qu'on ne demande la Shard Root qu'une seule fois
     let mut root_shard_requested = false;
 
@@ -94,8 +74,45 @@ fn main() {
     let startup_time = Instant::now();
     let orchestrator_warmup_delay = Duration::from_secs(10); // 3 secondes de délai (ajustable)
 
+    let mut last_tick = Instant::now();
+
+    // ============================================================================
+    // SERVEUR HTTP POUR LE DASHBOARD WEB
+    // ============================================================================
+    // On crée un conteneur sécurisé (Thread-Safe) pour stocker notre JSON
+    let shared_json = Arc::new(RwLock::new(String::from("{}")));
+    let server_json = shared_json.clone();
+
+    // On lance le serveur web dans un thread séparé pour ne pas bloquer Macroquad
+    thread::spawn(move || {
+        let server = tiny_http::Server::http("0.0.0.0:8080").expect("Impossible de démarrer le serveur HTTP");
+        println!("[WEB] Serveur Dashboard lancé sur http://localhost:8080");
+
+        for request in server.incoming_requests() {
+            // Lecture du JSON actuel
+            let json_data = {
+                let lock = server_json.read().unwrap();
+                lock.clone()
+            };
+
+            let mut response = tiny_http::Response::from_string(json_data);
+
+            // Ajout des headers CORS obligatoires pour que l'index.html puisse lire les données
+            response.add_header(
+                tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap()
+            );
+            response.add_header(
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()
+            );
+
+            let _ = request.respond(response);
+        }
+    });
+
     loop {
         let frame_start = Instant::now();
+        let dt = last_tick.elapsed().as_secs_f32();
+        last_tick = frame_start;
         let events = infra_net.poll_events();
 
         let mut cmd: Vec<(PeerType, Bytes)> = Vec::new();
@@ -107,7 +124,6 @@ fn main() {
                         handle_broker_data(data, &mut spatial_service)
                     }
                     InfrastructureEvent::MessageReceived { source: PeerType::Orchestrator, data } => {
-                        // handle_orchestrator_data(data, &mut spatial_service) aucune donnée attendue de l'Orchestrateur
                         println!("Erreur : Message reçu de l'Orchestrateur : {:?}", data);
                         None
                     }
@@ -122,13 +138,17 @@ fn main() {
             }
         }
 
+
+        if let Some(mut tick_packets) = spatial_service.tick(dt) {
+            cmd.append(&mut tick_packets);
+        }
+
         // --- 🚀 INITIALISATION DE LA PREMIÈRE SHARD ---
         if !root_shard_requested && startup_time.elapsed() >= orchestrator_warmup_delay {
             let spawn_packet = SpawnServer {
-                shard_id: ShardId::ROOT.into(), // Conversion automatique en u32
+                shard_id: ShardId::ROOT.into(),
             };
 
-            // On tente d'envoyer la commande.
             if infra_net.send_to_orchestrator(spawn_packet.to_bytes()).is_ok() {
                 println!("🌱 [SpatialServer] Requête de spawn pour la Shard ROOT envoyée après {}s de chauffe !", orchestrator_warmup_delay.as_secs());
                 root_shard_requested = true;
@@ -149,35 +169,20 @@ fn main() {
             }
         }
 
-        let json = visualizer::extract_viz_state(&spatial_service.quad_tree, spatial_service.margin);
-        if let Ok(mut lock) = shared_state.write() {
-            *lock = json;
+        // --- [SYNCHRONISATION WEB] ---
+        if let Ok(mut lock) = shared_json.write() {
+            *lock = spatial_service.extract_viz_state();
         }
 
         let elapsed = frame_start.elapsed();
         if elapsed < target_tick_duration {
-            std::thread::sleep(target_tick_duration - elapsed);
+            thread::sleep(target_tick_duration - elapsed);
         }
         if let Err(e) = io::stdout().flush() {
             eprintln!("Erreur lors du flush stdout: {}", e);
         }
     }
 }
-
-// fn handle_orchestrator_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
-//     let cmd : Option<Vec<(PeerType,Bytes)>> =
-//         match CustomServerPacket::try_from_bytes(raw_bytes) {
-//             None => {
-//                 eprintln!("Paquet binaire invalide ou Tag inconnu reçu de l'Orchestrateur.");
-//                 None
-//             }
-//             _ => {
-//                 eprintln!("Paquet reçu de l'Orchestrateur mais pas encore géré dans le SpatialService.");
-//                 None
-//             }
-//         };
-//     cmd
-// }
 
 fn handle_broker_data(raw_bytes: Bytes, spatial_service: &mut SpatialService) -> Option<Vec<(PeerType,Bytes)>> {
     let cmd : Option<Vec<(PeerType,Bytes)>> =

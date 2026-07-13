@@ -120,21 +120,38 @@ services:
       timeout: 2s
       retries: 5
 
-
   spatial-server:
+    profiles:
+      - quadtree
     build:
       context: ..
       dockerfile: docker/spatial_server.Dockerfile
     ports:
       - "8080:8080"
     environment:
-      # Utilisation de la résolution DNS interne de Docker pour cibler le conteneur orchestrator
       - ORCHESTRATOR_ADDR=orchestrator
       - ORCHESTRATOR_PORT=4000
-
       - BROKER_ADDR=${BROKER_ADDR:-broker}
       - BROKER_PORT=${BROKER_PORT:-5000}
+      - RUST_LOG=${RUST_LOG:-info}
+    depends_on:
+      - orchestrator
+    networks:
+      - game-network
 
+  spatial-voronoi:
+    profiles:
+      - voronoi
+    build:
+      context: ..
+      dockerfile: docker/spatial_voronoi.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ORCHESTRATOR_ADDR=orchestrator
+      - ORCHESTRATOR_PORT=4000
+      - BROKER_ADDR=${BROKER_ADDR:-broker}
+      - BROKER_PORT=${BROKER_PORT:-5000}
       - RUST_LOG=${RUST_LOG:-info}
     depends_on:
       - orchestrator
